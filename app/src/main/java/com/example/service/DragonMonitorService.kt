@@ -147,6 +147,9 @@ class DragonMonitorService : Service() {
             if (battery.isBypassCharging) {
                 append("\n• Bypass Charging: ACTIVE (Direct Motherboard Power)")
             }
+            if (battery.isNightChargingActive) {
+                append("\n• Night Charging Guard: ACTIVE (Cap: ").append(repository.chargingControlsFlow.value.nightCharging.targetLimitPercent).append("% • Bypass Protection)")
+            }
         }.toString()
 
         return NotificationCompat.Builder(this, DragonKernelApp.CHANNEL_TELEMETRY)

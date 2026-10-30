@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.Calendar
 import java.util.UUID
 import kotlin.math.max
 import kotlin.math.min
@@ -312,9 +313,60 @@ class KernelRepository private constructor(private val context: Context) {
         val cpuTemp = baseBatTemp + 4.5f + (Random.nextFloat() * 3.0f)
         _cpuTempFlow.value = cpuTemp
 
-        val isBypass = charging.bypassCharging && isRealCharging
+        // Night Charging computation
+        val nightConfig = charging.nightCharging
+        val calendar = Calendar.getInstance()
+        val curMinuteOfDay = calendar.get(Calendar.HOUR_OF_DAY) * 60 + calendar.get(Calendar.MINUTE)
+        val startMinuteOfDay = nightConfig.startHour * 60 + nightConfig.startMinute
+        val endMinuteOfDay = nightConfig.endHour * 60 + nightConfig.endMinute
+        val isScheduleActive = if (startMinuteOfDay > endMinuteOfDay) {
+            curMinuteOfDay >= startMinuteOfDay || curMinuteOfDay < endMinuteOfDay
+        } else {
+            curMinuteOfDay in startMinuteOfDay until endMinuteOfDay
+        }
+        val isNightChargingNow = nightConfig.isEnabled && isRealCharging && (isScheduleActive || nightConfig.isSimulationForced)
+
+        val minutesUntilWakeup = if (isScheduleActive) {
+            if (curMinuteOfDay <= endMinuteOfDay) endMinuteOfDay - curMinuteOfDay
+            else (1440 - curMinuteOfDay) + endMinuteOfDay
+        } else 360
+
+        val isTopUpPhase = isNightChargingNow && nightConfig.finishTopUpBeforeWakeup && minutesUntilWakeup in 1..45
+        val isTargetReached = batPct >= nightConfig.targetLimitPercent
+        val isNightThermalCutoff = isNightChargingNow && (baseBatTemp > nightConfig.maxThermalCeilingC)
+
+        // Effective bypass charging: explicit user toggle, or night auto-bypass when target reached, or thermal safety cutoff
+        val isBypass = (charging.bypassCharging && isRealCharging) ||
+                (isNightChargingNow && isTargetReached && nightConfig.autoBypassAtTarget && !isTopUpPhase) ||
+                (isNightChargingNow && isNightThermalCutoff)
+
+        // Determine night charging status text
+        val nightStatusText = when {
+            !nightConfig.isEnabled -> "Disabled • Standard charging speed active"
+            !isRealCharging -> String.format(java.util.Locale.US, "Scheduled: %02d:%02d – %02d:%02d (Cap: %d%%)", nightConfig.startHour, nightConfig.startMinute, nightConfig.endHour, nightConfig.endMinute, nightConfig.targetLimitPercent)
+            isNightThermalCutoff -> String.format(java.util.Locale.US, "Paused: Battery temp (%.1f°C) exceeded safety ceiling (%.1f°C)", baseBatTemp, nightConfig.maxThermalCeilingC)
+            isTopUpPhase -> String.format(java.util.Locale.US, "Morning Top-Up Active: Finishing gentle 100%% charge before %02d:%02d wake-up", nightConfig.endHour, nightConfig.endMinute)
+            isTargetReached && nightConfig.autoBypassAtTarget -> String.format(java.util.Locale.US, "Night Guard Active: Holding at %d%% via Hardware Bypass • 0 mA Battery Stress", nightConfig.targetLimitPercent)
+            isTargetReached -> String.format(java.util.Locale.US, "Night Guard Active: Battery cap (%d%%) maintained", nightConfig.targetLimitPercent)
+            isNightChargingNow -> String.format(java.util.Locale.US, "Cold Trickle Active: Charging softly at %d mA (~5W) to target %d%%", nightConfig.trickleCurrentMa, nightConfig.targetLimitPercent)
+            else -> String.format(java.util.Locale.US, "Scheduled: Active tonight at %02d:%02d (Target: %d%%)", nightConfig.startHour, nightConfig.startMinute, nightConfig.targetLimitPercent)
+        }
+
+        if (nightConfig.isCurrentlyActive != isNightChargingNow || nightConfig.statusDetail != nightStatusText) {
+            _chargingControlsFlow.value = charging.copy(
+                nightCharging = nightConfig.copy(
+                    isCurrentlyActive = isNightChargingNow,
+                    statusDetail = nightStatusText
+                )
+            )
+        }
+
         val currentChargeSpeedW = if (isRealCharging) {
-            if (isBypass) 0.0f else {
+            if (isBypass) 0.0f
+            else if (isNightChargingNow) {
+                if (isTopUpPhase) 14.8f + (Random.nextFloat() * 1.2f)
+                else (nightConfig.trickleCurrentMa * (voltageMv / 1000f)) / 1000f
+            } else {
                 when (charging.speedMode) {
                     ChargingSpeedMode.STANDARD_18W -> 17.5f + (Random.nextFloat() * 0.8f)
                     ChargingSpeedMode.FAST_33W -> 31.8f + (Random.nextFloat() * 1.2f)
@@ -325,7 +377,11 @@ class KernelRepository private constructor(private val context: Context) {
         } else 0.0f
 
         val currentMa = if (isRealCharging) {
-            if (isBypass) 0 else {
+            if (isBypass) 0
+            else if (isNightChargingNow) {
+                if (isTopUpPhase) 2800 + Random.nextInt(0, 200)
+                else nightConfig.trickleCurrentMa + Random.nextInt(-15, 15)
+            } else {
                 if (rawCurrentNow > 5000) (rawCurrentNow / 1000)
                 else if (rawCurrentNow in 100..25000) rawCurrentNow
                 else (currentChargeSpeedW * 1000 / (voltageMv / 1000f)).toInt()
@@ -372,6 +428,7 @@ class KernelRepository private constructor(private val context: Context) {
             chargeRateFormatted = chargeRateString,
             isCharging = isRealCharging,
             isBypassCharging = isBypass,
+            isNightChargingActive = isNightChargingNow,
             dischargeRateMa = dischargeMa,
             dischargeRatePercentPerHour = dischargePctPerHour,
             remainingCapacityMah = actualRemainingMah,
@@ -694,6 +751,128 @@ class KernelRepository private constructor(private val context: Context) {
                 _lastActionFeedbackFlow.value = "Manual Current Limiter Disabled"
             }
         }
+    }
+
+    // Night Charging Controls
+    fun updateNightChargingConfig(config: NightChargingConfig) {
+        val current = _chargingControlsFlow.value
+        _chargingControlsFlow.value = current.copy(nightCharging = config)
+        scope.launch {
+            if (config.isEnabled && config.muteChargingLed) {
+                RootHelper.executeCommand("echo 0 > /sys/class/leds/charging/brightness 2>/dev/null")
+            }
+            _lastActionFeedbackFlow.value = if (config.isEnabled) {
+                String.format(
+                    java.util.Locale.US,
+                    "Night Charging Guard Enabled (%02d:%02d – %02d:%02d • Cap: %d%%)",
+                    config.startHour,
+                    config.startMinute,
+                    config.endHour,
+                    config.endMinute,
+                    config.targetLimitPercent
+                )
+            } else {
+                "Night Charging Guard Disabled"
+            }
+        }
+    }
+
+    fun toggleNightCharging(enabled: Boolean) {
+        val current = _chargingControlsFlow.value
+        updateNightChargingConfig(current.nightCharging.copy(isEnabled = enabled))
+    }
+
+    fun setNightChargingSchedule(startH: Int, startM: Int, endH: Int, endM: Int) {
+        val current = _chargingControlsFlow.value
+        updateNightChargingConfig(
+            current.nightCharging.copy(
+                startHour = startH,
+                startMinute = startM,
+                endHour = endH,
+                endMinute = endM
+            )
+        )
+    }
+
+    fun setNightChargingScheduleMode(mode: NightChargingScheduleMode) {
+        val current = _chargingControlsFlow.value
+        updateNightChargingConfig(current.nightCharging.copy(scheduleMode = mode))
+    }
+
+    fun setNightChargingTarget(targetPct: Int) {
+        val current = _chargingControlsFlow.value
+        updateNightChargingConfig(current.nightCharging.copy(targetLimitPercent = targetPct))
+    }
+
+    fun setNightTrickleCurrent(currentMa: Int) {
+        val current = _chargingControlsFlow.value
+        updateNightChargingConfig(current.nightCharging.copy(trickleCurrentMa = currentMa))
+    }
+
+    fun setNightThermalCeiling(tempC: Float) {
+        val current = _chargingControlsFlow.value
+        updateNightChargingConfig(current.nightCharging.copy(maxThermalCeilingC = tempC))
+    }
+
+    fun toggleNightAutoBypass(enabled: Boolean) {
+        val current = _chargingControlsFlow.value
+        updateNightChargingConfig(current.nightCharging.copy(autoBypassAtTarget = enabled))
+    }
+
+    fun toggleNightTopUp(enabled: Boolean) {
+        val current = _chargingControlsFlow.value
+        updateNightChargingConfig(current.nightCharging.copy(finishTopUpBeforeWakeup = enabled))
+    }
+
+    fun toggleNightLedMute(enabled: Boolean) {
+        val current = _chargingControlsFlow.value
+        updateNightChargingConfig(current.nightCharging.copy(muteChargingLed = enabled))
+    }
+
+    fun toggleNightSimulation(forced: Boolean) {
+        val current = _chargingControlsFlow.value
+        val updated = current.nightCharging.copy(isSimulationForced = forced)
+        _chargingControlsFlow.value = current.copy(nightCharging = updated)
+        _lastActionFeedbackFlow.value = if (forced) {
+            "Night Charging Test Simulation Active (Holding 80% & Bypass)"
+        } else {
+            "Night Charging Simulation Stopped"
+        }
+    }
+
+    fun applyNightPreset(presetName: String) {
+        val current = _chargingControlsFlow.value
+        val newConfig = when (presetName) {
+            "ULTRA_LONGEVITY" -> current.nightCharging.copy(
+                isEnabled = true,
+                targetLimitPercent = 80,
+                autoBypassAtTarget = true,
+                finishTopUpBeforeWakeup = false,
+                trickleCurrentMa = 800,
+                maxThermalCeilingC = 33.0f,
+                muteChargingLed = true
+            )
+            "BALANCED_MORNING" -> current.nightCharging.copy(
+                isEnabled = true,
+                targetLimitPercent = 80,
+                autoBypassAtTarget = true,
+                finishTopUpBeforeWakeup = true,
+                trickleCurrentMa = 1200,
+                maxThermalCeilingC = 35.0f,
+                muteChargingLed = true
+            )
+            "WHISPER_COLD" -> current.nightCharging.copy(
+                isEnabled = true,
+                targetLimitPercent = 85,
+                autoBypassAtTarget = true,
+                finishTopUpBeforeWakeup = true,
+                trickleCurrentMa = 500, // Ultra quiet 500mA
+                maxThermalCeilingC = 31.0f,
+                muteChargingLed = true
+            )
+            else -> current.nightCharging
+        }
+        updateNightChargingConfig(newConfig)
     }
 
     // Tools: FPS

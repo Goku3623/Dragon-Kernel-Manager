@@ -59,6 +59,7 @@ data class BatteryTelemetry(
     val designCapacityMah: Int = 5000,
     val isCharging: Boolean = false,
     val isBypassCharging: Boolean = false,
+    val isNightChargingActive: Boolean = false,
     val activeDrainPerHour: Float = 9.2f,
     val idleDrainPerHour: Float = 1.4f,
     val deepSleepPercent: Float = 88.5f,
@@ -135,12 +136,36 @@ enum class ChargingSpeedMode(val label: String, val maxWattage: Int, val maxCurr
     HYPERCHARGE_90W("HyperCharge 90W", 90, 20000)
 }
 
+enum class NightChargingScheduleMode(val label: String, val description: String) {
+    SCHEDULED("Scheduled Hours", "Activates automatically during custom user-set night hours"),
+    SMART_ALARM("Smart Morning Alarm", "Syncs with system alarm to calculate wake-up time")
+}
+
+data class NightChargingConfig(
+    val isEnabled: Boolean = false,
+    val scheduleMode: NightChargingScheduleMode = NightChargingScheduleMode.SCHEDULED,
+    val startHour: Int = 22, // 10:00 PM
+    val startMinute: Int = 0,
+    val endHour: Int = 7,    // 07:00 AM
+    val endMinute: Int = 0,
+    val targetLimitPercent: Int = 80, // 70% to 90% (Holds charge overnight)
+    val finishTopUpBeforeWakeup: Boolean = true, // Slowly top-up to 100% 45m before alarm/wake-up
+    val autoBypassAtTarget: Boolean = true, // Auto switch to USB Direct Motherboard Bypass once target % reached
+    val trickleCurrentMa: Int = 1000, // 500mA - 2000mA (whisper cold slow charging)
+    val maxThermalCeilingC: Float = 34.0f, // Safety thermal ceiling during sleep; pauses if exceeded
+    val muteChargingLed: Boolean = true, // Turn off charging LED and status lights at night
+    val isSimulationForced: Boolean = false, // Allows user to test/demo night mode immediately
+    val isCurrentlyActive: Boolean = false,
+    val statusDetail: String = "Inactive (Standby for night schedule)"
+)
+
 data class ChargingControls(
     val speedMode: ChargingSpeedMode = ChargingSpeedMode.HYPERCHARGE_90W,
     val bypassCharging: Boolean = false, // Powers device directly, stops battery charge
     val manualCurrentLimiterEnabled: Boolean = false,
     val manualCurrentLimitMa: Int = 20000, // 500mA - 20000mA (Up to 90 Watt speed!)
-    val bypassThermalLimit: Boolean = false // Ignores thermal step-down to sustain 90W
+    val bypassThermalLimit: Boolean = false, // Ignores thermal step-down to sustain 90W
+    val nightCharging: NightChargingConfig = NightChargingConfig()
 )
 
 data class FpsOverlayConfig(
