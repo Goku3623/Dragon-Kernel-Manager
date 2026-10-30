@@ -1152,6 +1152,9 @@ fun NightChargingCard(
     repository: KernelRepository
 ) {
     val night = chargingControls.nightCharging
+    var editingScheduleTarget by remember { mutableStateOf<String?>(null) } // "BEDTIME" or "WAKEUP"
+    var tempHour by remember { mutableStateOf(night.startHour) }
+    var tempMinute by remember { mutableStateOf(night.startMinute) }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -1439,84 +1442,431 @@ fun NightChargingCard(
 
             if (night.scheduleMode == com.example.data.model.NightChargingScheduleMode.SCHEDULED) {
                 Spacer(modifier = Modifier.height(10.dp))
+
+                // Tunable Bedtime (Start) & Wake-up (End) Cards
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    // Bedtime (Start)
+                    // Bedtime (Start) Card
                     Card(
                         modifier = Modifier.weight(1f),
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
-                        shape = RoundedCornerShape(12.dp)
+                        shape = RoundedCornerShape(14.dp),
+                        border = CardDefaults.outlinedCardBorder()
                     ) {
                         Column(modifier = Modifier.padding(10.dp)) {
-                            Text("Bedtime (Start)", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(
-                                String.format(Locale.US, "%02d:%02d", night.startHour, night.startMinute),
-                                fontSize = 18.sp,
-                                fontWeight = FontWeight.Bold,
-                                fontFamily = FontFamily.Monospace,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                IconButton(
-                                    onClick = {
-                                        val newH = if (night.startHour == 0) 23 else night.startHour - 1
-                                        repository.setNightChargingSchedule(newH, night.startMinute, night.endHour, night.endMinute)
-                                    },
-                                    modifier = Modifier.size(28.dp)
-                                ) {
-                                    Text("-1h", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.Bedtime,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Bedtime", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
                                 }
                                 IconButton(
                                     onClick = {
-                                        val newH = (night.startHour + 1) % 24
-                                        repository.setNightChargingSchedule(newH, night.startMinute, night.endHour, night.endMinute)
+                                        tempHour = night.startHour
+                                        tempMinute = night.startMinute
+                                        editingScheduleTarget = "BEDTIME"
                                     },
-                                    modifier = Modifier.size(28.dp)
+                                    modifier = Modifier.size(24.dp)
                                 ) {
-                                    Text("+1h", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                                    Icon(
+                                        Icons.Default.Tune,
+                                        contentDescription = "Tune Exact",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(15.dp)
+                                    )
                                 }
+                            }
+
+                            // Time Readout
+                            Row(verticalAlignment = Alignment.Bottom) {
+                                Text(
+                                    text = String.format(Locale.US, "%02d:%02d", night.startHour, night.startMinute),
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Black,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                val amPm = if (night.startHour >= 12) "PM" else "AM"
+                                val h12 = if (night.startHour == 0) 12 else if (night.startHour > 12) night.startHour - 12 else night.startHour
+                                Text(
+                                    text = String.format(Locale.US, "%d:%02d %s", h12, night.startMinute, amPm),
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(bottom = 2.dp)
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(6.dp))
+
+                            // Hour Adjustment (-1h / +1h)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Hour (${night.startHour}h)", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                                    FilledTonalButton(
+                                        onClick = {
+                                            val newH = if (night.startHour == 0) 23 else night.startHour - 1
+                                            repository.setNightChargingSchedule(newH, night.startMinute, night.endHour, night.endMinute)
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                                        modifier = Modifier.height(24.dp),
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Text("-1h", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                    FilledTonalButton(
+                                        onClick = {
+                                            val newH = (night.startHour + 1) % 24
+                                            repository.setNightChargingSchedule(newH, night.startMinute, night.endHour, night.endMinute)
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                                        modifier = Modifier.height(24.dp),
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Text("+1h", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(4.dp))
+
+                            // Minute Adjustment (-5m / +5m)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Min (${String.format(Locale.US, "%02d", night.startMinute)}m)", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                                    FilledTonalButton(
+                                        onClick = {
+                                            val newM = if (night.startMinute < 5) (night.startMinute + 60 - 5) % 60 else night.startMinute - 5
+                                            repository.setNightChargingSchedule(night.startHour, newM, night.endHour, night.endMinute)
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                                        modifier = Modifier.height(24.dp),
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Text("-5m", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                    FilledTonalButton(
+                                        onClick = {
+                                            val newM = (night.startMinute + 5) % 60
+                                            repository.setNightChargingSchedule(night.startHour, newM, night.endHour, night.endMinute)
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                                        modifier = Modifier.height(24.dp),
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Text("+5m", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(6.dp))
+
+                            // Quick Minute Presets: :00, :15, :30, :45
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(3.dp)
+                            ) {
+                                listOf(0, 15, 30, 45).forEach { m ->
+                                    val isSelected = night.startMinute == m
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(
+                                                if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
+                                                else MaterialTheme.colorScheme.surface
+                                            )
+                                            .border(
+                                                1.dp,
+                                                if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.15f),
+                                                RoundedCornerShape(6.dp)
+                                            )
+                                            .clickable { repository.setNightChargingSchedule(night.startHour, m, night.endHour, night.endMinute) }
+                                            .padding(vertical = 3.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = String.format(Locale.US, ":%02d", m),
+                                            fontSize = 9.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                            fontFamily = FontFamily.Monospace,
+                                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(6.dp))
+
+                            // Precision Time Tuner Button
+                            OutlinedButton(
+                                onClick = {
+                                    tempHour = night.startHour
+                                    tempMinute = night.startMinute
+                                    editingScheduleTarget = "BEDTIME"
+                                },
+                                shape = RoundedCornerShape(6.dp),
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(24.dp)
+                            ) {
+                                Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(11.dp))
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Text("Tune Exact Time", fontSize = 9.sp)
                             }
                         }
                     }
 
-                    // Wake-up (End)
+                    // Wake-up (End) Card
                     Card(
                         modifier = Modifier.weight(1f),
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
-                        shape = RoundedCornerShape(12.dp)
+                        shape = RoundedCornerShape(14.dp),
+                        border = CardDefaults.outlinedCardBorder()
                     ) {
                         Column(modifier = Modifier.padding(10.dp)) {
-                            Text("Wake-up (End)", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(
-                                String.format(Locale.US, "%02d:%02d", night.endHour, night.endMinute),
-                                fontSize = 18.sp,
-                                fontWeight = FontWeight.Bold,
-                                fontFamily = FontFamily.Monospace,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                IconButton(
-                                    onClick = {
-                                        val newH = if (night.endHour == 0) 23 else night.endHour - 1
-                                        repository.setNightChargingSchedule(night.startHour, night.startMinute, newH, night.endMinute)
-                                    },
-                                    modifier = Modifier.size(28.dp)
-                                ) {
-                                    Text("-1h", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.WbSunny,
+                                        contentDescription = null,
+                                        tint = WarningOrange,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Wake-up", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
                                 }
                                 IconButton(
                                     onClick = {
-                                        val newH = (night.endHour + 1) % 24
-                                        repository.setNightChargingSchedule(night.startHour, night.startMinute, newH, night.endMinute)
+                                        tempHour = night.endHour
+                                        tempMinute = night.endMinute
+                                        editingScheduleTarget = "WAKEUP"
                                     },
-                                    modifier = Modifier.size(28.dp)
+                                    modifier = Modifier.size(24.dp)
                                 ) {
-                                    Text("+1h", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                                    Icon(
+                                        Icons.Default.Tune,
+                                        contentDescription = "Tune Exact",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(15.dp)
+                                    )
                                 }
                             }
+
+                            // Time Readout
+                            Row(verticalAlignment = Alignment.Bottom) {
+                                Text(
+                                    text = String.format(Locale.US, "%02d:%02d", night.endHour, night.endMinute),
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Black,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                val amPm = if (night.endHour >= 12) "PM" else "AM"
+                                val h12 = if (night.endHour == 0) 12 else if (night.endHour > 12) night.endHour - 12 else night.endHour
+                                Text(
+                                    text = String.format(Locale.US, "%d:%02d %s", h12, night.endMinute, amPm),
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(bottom = 2.dp)
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(6.dp))
+
+                            // Hour Adjustment (-1h / +1h)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Hour (${night.endHour}h)", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                                    FilledTonalButton(
+                                        onClick = {
+                                            val newH = if (night.endHour == 0) 23 else night.endHour - 1
+                                            repository.setNightChargingSchedule(night.startHour, night.startMinute, newH, night.endMinute)
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                                        modifier = Modifier.height(24.dp),
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Text("-1h", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                    FilledTonalButton(
+                                        onClick = {
+                                            val newH = (night.endHour + 1) % 24
+                                            repository.setNightChargingSchedule(night.startHour, night.startMinute, newH, night.endMinute)
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                                        modifier = Modifier.height(24.dp),
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Text("+1h", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(4.dp))
+
+                            // Minute Adjustment (-5m / +5m)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Min (${String.format(Locale.US, "%02d", night.endMinute)}m)", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                                    FilledTonalButton(
+                                        onClick = {
+                                            val newM = if (night.endMinute < 5) (night.endMinute + 60 - 5) % 60 else night.endMinute - 5
+                                            repository.setNightChargingSchedule(night.startHour, night.startMinute, night.endHour, newM)
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                                        modifier = Modifier.height(24.dp),
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Text("-5m", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                    FilledTonalButton(
+                                        onClick = {
+                                            val newM = (night.endMinute + 5) % 60
+                                            repository.setNightChargingSchedule(night.startHour, night.startMinute, night.endHour, newM)
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                                        modifier = Modifier.height(24.dp),
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Text("+5m", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(6.dp))
+
+                            // Quick Minute Presets: :00, :15, :30, :45
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(3.dp)
+                            ) {
+                                listOf(0, 15, 30, 45).forEach { m ->
+                                    val isSelected = night.endMinute == m
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(
+                                                if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
+                                                else MaterialTheme.colorScheme.surface
+                                            )
+                                            .border(
+                                                1.dp,
+                                                if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.15f),
+                                                RoundedCornerShape(6.dp)
+                                            )
+                                            .clickable { repository.setNightChargingSchedule(night.startHour, night.startMinute, night.endHour, m) }
+                                            .padding(vertical = 3.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = String.format(Locale.US, ":%02d", m),
+                                            fontSize = 9.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                            fontFamily = FontFamily.Monospace,
+                                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(6.dp))
+
+                            // Precision Time Tuner Button
+                            OutlinedButton(
+                                onClick = {
+                                    tempHour = night.endHour
+                                    tempMinute = night.endMinute
+                                    editingScheduleTarget = "WAKEUP"
+                                },
+                                shape = RoundedCornerShape(6.dp),
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(24.dp)
+                            ) {
+                                Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(11.dp))
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Text("Tune Exact Time", fontSize = 9.sp)
+                            }
                         }
+                    }
+                }
+
+                // Schedule Duration Summary Pill
+                Spacer(modifier = Modifier.height(8.dp))
+                val startMins = night.startHour * 60 + night.startMinute
+                val endMins = night.endHour * 60 + night.endMinute
+                val diffMins = if (endMins >= startMins) endMins - startMins else (1440 - startMins) + endMins
+                val durHours = diffMins / 60
+                val durMins = diffMins % 60
+                val durString = if (durMins == 0) "${durHours} hours" else "${durHours}h ${durMins}m"
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.AccessTime, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Night Window Duration: $durString",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        Text(
+                            text = "${String.format(Locale.US, "%02d:%02d", night.startHour, night.startMinute)} → ${String.format(Locale.US, "%02d:%02d", night.endHour, night.endMinute)}",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.primary
+                        )
                     }
                 }
             } else {
@@ -1734,6 +2084,198 @@ fun NightChargingCard(
                         )
                     }
                 }
+            }
+
+            // Precision Hour & Minute Tuning Dialog
+            if (editingScheduleTarget != null) {
+                val isStart = editingScheduleTarget == "BEDTIME"
+                val titleText = if (isStart) "Tune Bedtime (Start Time)" else "Tune Wake-up (End Time)"
+
+                AlertDialog(
+                    onDismissRequest = { editingScheduleTarget = null },
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Default.AccessTime,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(28.dp)
+                        )
+                    },
+                    title = {
+                        Text(titleText, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    },
+                    text = {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(14.dp)
+                        ) {
+                            // Big Clock Display
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f))
+                                    .padding(14.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text(
+                                        text = String.format(Locale.US, "%02d:%02d", tempHour, tempMinute),
+                                        fontSize = 36.sp,
+                                        fontWeight = FontWeight.Black,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    val amPm = if (tempHour >= 12) "PM" else "AM"
+                                    val h12 = if (tempHour == 0) 12 else if (tempHour > 12) tempHour - 12 else tempHour
+                                    Text(
+                                        text = String.format(Locale.US, "%d:%02d %s", h12, tempMinute, amPm),
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+
+                            // 1. HOUR TUNER (0 - 23)
+                            Column {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("Hour:", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        FilledTonalButton(
+                                            onClick = { tempHour = if (tempHour == 0) 23 else tempHour - 1 },
+                                            modifier = Modifier.size(28.dp),
+                                            contentPadding = PaddingValues(0.dp),
+                                            shape = CircleShape
+                                        ) {
+                                            Text("-", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                        }
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = String.format(Locale.US, "%02d h", tempHour),
+                                            fontSize = 15.sp,
+                                            fontWeight = FontWeight.Black,
+                                            fontFamily = FontFamily.Monospace,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        FilledTonalButton(
+                                            onClick = { tempHour = (tempHour + 1) % 24 },
+                                            modifier = Modifier.size(28.dp),
+                                            contentPadding = PaddingValues(0.dp),
+                                            shape = CircleShape
+                                        ) {
+                                            Text("+", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                        }
+                                    }
+                                }
+                                Slider(
+                                    value = tempHour.toFloat(),
+                                    onValueChange = { tempHour = it.toInt() },
+                                    valueRange = 0f..23f,
+                                    steps = 22
+                                )
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text("00:00 (Midnight)", fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text("12:00 (Noon)", fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text("23:00 (Night)", fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+
+                            // 2. MINUTE TUNER (0 - 59)
+                            Column {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("Minute:", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        FilledTonalButton(
+                                            onClick = { tempMinute = if (tempMinute == 0) 59 else tempMinute - 1 },
+                                            modifier = Modifier.size(28.dp),
+                                            contentPadding = PaddingValues(0.dp),
+                                            shape = CircleShape
+                                        ) {
+                                            Text("-", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                        }
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = String.format(Locale.US, "%02d m", tempMinute),
+                                            fontSize = 15.sp,
+                                            fontWeight = FontWeight.Black,
+                                            fontFamily = FontFamily.Monospace,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        FilledTonalButton(
+                                            onClick = { tempMinute = (tempMinute + 1) % 60 },
+                                            modifier = Modifier.size(28.dp),
+                                            contentPadding = PaddingValues(0.dp),
+                                            shape = CircleShape
+                                        ) {
+                                            Text("+", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                        }
+                                    }
+                                }
+                                Slider(
+                                    value = tempMinute.toFloat(),
+                                    onValueChange = { tempMinute = it.toInt() },
+                                    valueRange = 0f..59f,
+                                    steps = 58
+                                )
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text("00 min", fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text("30 min", fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text("59 min", fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text("Quick Minute Presets:", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    listOf(0, 15, 30, 45).forEach { m ->
+                                        val isSelected = tempMinute == m
+                                        FilterChip(
+                                            selected = isSelected,
+                                            onClick = { tempMinute = m },
+                                            label = { Text(String.format(Locale.US, ":%02d", m), fontSize = 11.sp, fontFamily = FontFamily.Monospace) },
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                if (isStart) {
+                                    repository.setNightChargingSchedule(tempHour, tempMinute, night.endHour, night.endMinute)
+                                } else {
+                                    repository.setNightChargingSchedule(night.startHour, night.startMinute, tempHour, tempMinute)
+                                }
+                                editingScheduleTarget = null
+                            }
+                        ) {
+                            Text("Apply Time")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { editingScheduleTarget = null }) {
+                            Text("Cancel")
+                        }
+                    }
+                )
             }
         }
     }
