@@ -102,9 +102,9 @@ class DragonMonitorService : Service() {
 
         val customProfile = repository.activeCustomProfileFlow.value
         val title = if (customProfile != null) {
-            "Dragon Kernel | ${customProfile.title} [CUSTOM]"
+            "Dragon Kernel Manager | ${customProfile.title} [CUSTOM]"
         } else {
-            "Dragon Kernel | ${profile.title} [${profile.name}]"
+            "Dragon Kernel Manager | ${profile.title} [${profile.name}]"
         }
 
         // PendingIntent to open minimal ProfilePopupActivity directly without launching the full app

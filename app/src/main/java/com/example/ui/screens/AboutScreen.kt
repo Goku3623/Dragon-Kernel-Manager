@@ -75,8 +75,8 @@ fun AboutScreen(repository: KernelRepository) {
                     Spacer(modifier = Modifier.height(14.dp))
 
                     Text(
-                        text = "Dragon Kernel",
-                        fontSize = 26.sp,
+                        text = "Dragon Kernel Manager",
+                        fontSize = 24.sp,
                         fontWeight = FontWeight.Black,
                         letterSpacing = 1.sp,
                         color = MaterialTheme.colorScheme.primary
@@ -215,7 +215,7 @@ fun AboutScreen(repository: KernelRepository) {
                     Spacer(modifier = Modifier.height(8.dp))
 
                     Text(
-                        text = "Dragon Kernel",
+                        text = "Dragon Kernel Manager",
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 2.sp,

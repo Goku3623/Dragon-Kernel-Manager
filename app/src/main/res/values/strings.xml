@@ -1,4 +1,4 @@
 <resources>
-    <string name="app_name">Dragon Kernel</string>
+    <string name="app_name">Dragon Kernel Manager</string>
     <string name="accessibility_service_description">Dragon Kernel background accessibility monitor for real-time foreground app telemetry, gaming workload detection, and intelligent CPU/GPU governor adjustments.</string>
 </resources>

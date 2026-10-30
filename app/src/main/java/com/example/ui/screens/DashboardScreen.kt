@@ -103,8 +103,8 @@ fun DashboardScreen(
                         Column {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
-                                    text = "DRAGON KERNEL",
-                                    fontSize = 22.sp,
+                                    text = "DRAGON KERNEL MANAGER",
+                                    fontSize = 20.sp,
                                     fontWeight = FontWeight.Black,
                                     letterSpacing = 1.sp,
                                     color = MaterialTheme.colorScheme.primary

@@ -1,5 +1,5 @@
 {
-  "name": "Dragon Kernel",
+  "name": "Dragon Kernel Manager",
   "description": "Advanced Kernel & Hardware Manager for Xiaomi POCO F6 with CPU/GPU tuning, 90W HyperCharge controls, real-time telemetry, and thermal profiles.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

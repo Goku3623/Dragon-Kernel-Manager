@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "Dragon Kernel"
+rootProject.name = "Dragon Kernel Manager"
 
 include(":app")
