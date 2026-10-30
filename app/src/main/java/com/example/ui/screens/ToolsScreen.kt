@@ -43,9 +43,10 @@ fun ToolsScreen(repository: KernelRepository) {
     val clipboardManager = LocalClipboardManager.current
 
     var selectedToolSection by remember { mutableStateOf(0) }
-    // 0: App Freezer & Autostart, 1: DexOpt, 2: Script Manager, 3: Logs, Cloud Sync & Theming
-    val toolTabs = listOf("App Freezer", "DexOpt", "Scripts", "Logs & Sync")
+    // 0: App Freezer, 1: VRAM, 2: DexOpt, 3: Scripts, 4: Logs & Sync
+    val toolTabs = listOf("App Freezer", "VRAM", "DexOpt", "Scripts", "Logs & Sync")
 
+    val vramConfig by repository.vramConfigFlow.collectAsState()
     val dexOptConfig by repository.dexOptConfigFlow.collectAsState()
     val apps by repository.appsFlow.collectAsState()
     val thermalConfig by repository.thermalConfigFlow.collectAsState()
@@ -241,6 +242,16 @@ fun ToolsScreen(repository: KernelRepository) {
             }
 
             1 -> {
+                // VRAM & MEMORY TUNING
+                item {
+                    VramTuningSection(
+                        vramConfig = vramConfig,
+                        repository = repository
+                    )
+                }
+            }
+
+            2 -> {
                 // DEXOPT ART COMPILATION CARD
                 item {
                     Card(
@@ -312,7 +323,7 @@ fun ToolsScreen(repository: KernelRepository) {
                 }
             }
 
-            2 -> {
+            3 -> {
                 // SCRIPT MANAGER (PRESETS & USER SCRIPTS)
                 item {
                     var showNewScriptDialog by remember { mutableStateOf(false) }
@@ -391,7 +402,7 @@ fun ToolsScreen(repository: KernelRepository) {
                 }
             }
 
-            3 -> {
+            4 -> {
                 // LOG HISTORY, POWER HEALTH TRACKING, CLOUD SYNC & THEME CUSTOMIZATION
                 item {
                     // Theme Customizer & Dark Mode Card
@@ -833,6 +844,504 @@ fun ScriptItemCard(
                     color = if (script.lastExitCode == 0) SuccessGreen else DangerRed
                 )
             }
+        }
+    }
+}
+
+@Composable
+fun VramTuningSection(
+    vramConfig: com.example.data.model.VramConfig,
+    repository: KernelRepository
+) {
+    var vramSize by remember(vramConfig.vramSizeGb) { mutableStateOf(vramConfig.vramSizeGb) }
+    var swappiness by remember(vramConfig.swappiness) { mutableStateOf(vramConfig.swappiness.toFloat()) }
+    var zramSize by remember(vramConfig.zramSizeGb) { mutableStateOf(vramConfig.zramSizeGb) }
+    var zramAlgo by remember(vramConfig.zramAlgorithm) { mutableStateOf(vramConfig.zramAlgorithm) }
+    var vfsPressure by remember(vramConfig.vfsCachePressure) { mutableStateOf(vramConfig.vfsCachePressure.toFloat()) }
+    var pageCluster by remember(vramConfig.pageCluster) { mutableStateOf(vramConfig.pageCluster) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        // 1. Hardware Architecture & Live Memory Allocation Telemetry
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = CardDefaults.outlinedCardBorder()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Memory, contentDescription = "RAM & VRAM", tint = MaterialTheme.colorScheme.primary)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Unified Memory Architecture (UMA)", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    }
+                    Badge(containerColor = MaterialTheme.colorScheme.primaryContainer) {
+                        Text("Adreno 735", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+
+                Text(
+                    text = "Snapdragon 8s Gen 3 (SM8635) shares 12 GB LPDDR5X (8533 Mbps) memory between Kryo CPU and Adreno 735 GPU with dynamic kernel carveouts.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 4.dp)
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Memory Allocation Progress Bar
+                val usedRatio = (vramConfig.usedRamMb.toFloat() / vramConfig.totalRamMb).coerceIn(0f, 1f)
+
+                Column {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Physical RAM Usage", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text(
+                            "${vramConfig.usedRamMb} MB / ${vramConfig.totalRamMb} MB (${((usedRatio * 100).toInt())}%)",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    LinearProgressIndicator(
+                        progress = { usedRatio },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(10.dp)
+                            .clip(RoundedCornerShape(5.dp)),
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // 4 Telemetry Tiles
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    MemoryStatTile(
+                        title = "TOTAL RAM",
+                        value = "12 GB",
+                        sub = "LPDDR5X",
+                        modifier = Modifier.weight(1f)
+                    )
+                    MemoryStatTile(
+                        title = "ACTIVE VRAM",
+                        value = if (vramSize == 0) "Auto" else "${vramSize} GB",
+                        sub = if (vramSize == 0) "Dynamic" else "Carveout",
+                        modifier = Modifier.weight(1f)
+                    )
+                    MemoryStatTile(
+                        title = "zRAM SWAP",
+                        value = "${vramConfig.zramUsedMb} MB",
+                        sub = if (zramSize == 0) "Off" else "${zramSize} GB ($zramAlgo)",
+                        modifier = Modifier.weight(1f)
+                    )
+                    MemoryStatTile(
+                        title = "SWAPPINESS",
+                        value = "${swappiness.toInt()}",
+                        sub = "/ 200",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+        }
+
+        // 2. VRAM Size / GPU Carveout Buffer
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = CardDefaults.outlinedCardBorder()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Speed, contentDescription = "VRAM Size", tint = MaterialTheme.colorScheme.primary)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("GPU VRAM Buffer Allocation", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                }
+
+                Text(
+                    text = "Controls dedicated address space reserved for GPU framebuffers, mipmaps, and Vulkan/OpenGL texture buffers. Higher allocation (4GB-8GB) eliminates micro-stuttering in 3D gaming and Switch/Windows emulators.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 4.dp)
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf(
+                        0 to "Auto",
+                        2 to "2 GB",
+                        3 to "3 GB",
+                        4 to "4 GB",
+                        6 to "6 GB",
+                        8 to "8 GB"
+                    ).forEach { (size, label) ->
+                        val isSelected = (vramSize == size)
+                        FilterChip(
+                            selected = isSelected,
+                            onClick = {
+                                vramSize = size
+                                repository.updateVramConfig(vramConfig.copy(vramSizeGb = size))
+                            },
+                            label = { Text(label, fontSize = 10.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
+        }
+
+        // 3. Swappiness Tuner (/proc/sys/vm/swappiness)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = CardDefaults.outlinedCardBorder()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Tune, contentDescription = "Swappiness", tint = MaterialTheme.colorScheme.primary)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Kernel Swappiness", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    }
+                    Badge(containerColor = MaterialTheme.colorScheme.primaryContainer) {
+                        Text("${swappiness.toInt()} / 200", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+
+                Text(
+                    text = "Controls kernel ratio between swapping anonymous process memory into zRAM vs dropping file caches. Lower values (30-60) prioritize gaming smoothness by keeping 3D textures in physical RAM. Higher values (100-200) maximize app retention.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 4.dp)
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Slider(
+                    value = swappiness,
+                    onValueChange = {
+                        swappiness = it
+                        repository.updateVramConfig(vramConfig.copy(swappiness = it.toInt()))
+                    },
+                    valueRange = 0f..200f,
+                    steps = 39,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Quick Presets
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    val swapPresets = listOf(
+                        30 to "Game 30",
+                        60 to "AOSP 60",
+                        100 to "Stock 100",
+                        160 to "High 160",
+                        200 to "Max 200"
+                    )
+                    swapPresets.forEach { (value, label) ->
+                        val isSelected = (swappiness.toInt() == value)
+                        FilterChip(
+                            selected = isSelected,
+                            onClick = {
+                                swappiness = value.toFloat()
+                                repository.updateVramConfig(vramConfig.copy(swappiness = value))
+                            },
+                            label = { Text(label, fontSize = 9.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
+        }
+
+        // 4. zRAM Virtual Memory & Compression Algorithm
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = CardDefaults.outlinedCardBorder()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Storage, contentDescription = "zRAM", tint = MaterialTheme.colorScheme.primary)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("zRAM Virtual Swap Disk", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    }
+                    Badge(containerColor = MaterialTheme.colorScheme.secondaryContainer) {
+                        Text(if (zramSize == 0) "Disabled" else "${zramSize} GB ($zramAlgo)", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                    }
+                }
+
+                Text(
+                    text = "A virtual swap block device in RAM. Compressed memory pages are stored in zRAM to multiply multitasking capacity with zero flash write degradation.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 4.dp)
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+                Text("zRAM Disk Size:", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf(
+                        0 to "Off",
+                        4 to "4 GB",
+                        6 to "6 GB",
+                        8 to "8 GB",
+                        10 to "10 GB",
+                        12 to "12 GB"
+                    ).forEach { (size, label) ->
+                        val isSelected = (zramSize == size)
+                        FilterChip(
+                            selected = isSelected,
+                            onClick = {
+                                zramSize = size
+                                repository.updateVramConfig(vramConfig.copy(zramSizeGb = size))
+                            },
+                            label = { Text(label, fontSize = 10.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                Text("Compression Algorithm (/sys/block/zram0/comp_algorithm):", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf(
+                        "lz4" to "lz4 (Fast/Low Latency)",
+                        "zstd" to "zstd (High Ratio)",
+                        "lzo-rle" to "lzo-rle (Balanced)",
+                        "lz4hc" to "lz4hc"
+                    ).forEach { (algo, label) ->
+                        val isSelected = (zramAlgo == algo)
+                        FilterChip(
+                            selected = isSelected,
+                            onClick = {
+                                zramAlgo = algo
+                                repository.updateVramConfig(vramConfig.copy(zramAlgorithm = algo))
+                            },
+                            label = { Text(algo, fontSize = 10.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
+        }
+
+        // 5. Page-Cluster & VFS Cache Pressure
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = CardDefaults.outlinedCardBorder()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.SettingsSuggest, contentDescription = "Latency", tint = MaterialTheme.colorScheme.primary)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Page-Cluster & Cache Pressure", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Page-Cluster (/proc/sys/vm/page-cluster)", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        Text("0 disables swap readahead (prevents game frame drops on zRAM)", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Badge(containerColor = MaterialTheme.colorScheme.primaryContainer) {
+                        Text("$pageCluster (${if (pageCluster == 0) "Zero Latency" else "Default"})", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf(
+                        0 to "0 (Zero Latency)",
+                        1 to "1 (2 pages)",
+                        2 to "2 (4 pages)",
+                        3 to "3 (Default)"
+                    ).forEach { (cluster, label) ->
+                        val isSelected = (pageCluster == cluster)
+                        FilterChip(
+                            selected = isSelected,
+                            onClick = {
+                                pageCluster = cluster
+                                repository.updateVramConfig(vramConfig.copy(pageCluster = cluster))
+                            },
+                            label = { Text(label, fontSize = 10.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("VFS Cache Pressure", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        Text("Tendency to reclaim directory & inode memory caches", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Badge(containerColor = MaterialTheme.colorScheme.primaryContainer) {
+                        Text("${vfsPressure.toInt()}", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+
+                Slider(
+                    value = vfsPressure,
+                    onValueChange = {
+                        vfsPressure = it
+                        repository.updateVramConfig(vramConfig.copy(vfsCachePressure = it.toInt()))
+                    },
+                    valueRange = 50f..150f,
+                    steps = 19,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+
+        // 6. Action Controls: Apply & Purge
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = CardDefaults.outlinedCardBorder()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = { repository.applyVramSettings() },
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.weight(1.2f)
+                    ) {
+                        Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Apply VRAM Tweaks", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+
+                    OutlinedButton(
+                        onClick = { repository.purgeVramAndCaches() },
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.weight(1.1f)
+                    ) {
+                        Icon(Icons.Default.CleaningServices, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Flush VRAM Cache", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = { repository.resetVramDefaults() }) {
+                        Icon(Icons.Default.RestartAlt, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Reset Snapdragon Defaults", fontSize = 11.sp)
+                    }
+                }
+
+                if (!vramConfig.lastDropCacheFeedback.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(SuccessGreen.copy(alpha = 0.15f))
+                            .border(1.dp, SuccessGreen.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                            .padding(10.dp)
+                    ) {
+                        Text(
+                            text = vramConfig.lastDropCacheFeedback ?: "",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = SuccessGreen
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun MemoryStatTile(
+    title: String,
+    value: String,
+    sub: String,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            .padding(vertical = 8.dp, horizontal = 4.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(title, fontSize = 9.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(value, fontSize = 13.sp, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.primary)
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(sub, fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

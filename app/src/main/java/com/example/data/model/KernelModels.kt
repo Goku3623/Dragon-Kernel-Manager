@@ -149,8 +149,22 @@ data class FpsOverlayConfig(
     val showCpuTemp: Boolean = true,
     val showBatTemp: Boolean = true,
     val showGpuClock: Boolean = true,
-    val showRamUsage: Boolean = true,
-    val showDrainRate: Boolean = true
+    val showRamUsage: Boolean = true
+)
+
+data class VramConfig(
+    val vramSizeGb: Int = 4, // 0 = Dynamic/Auto, 2, 3, 4, 6, 8 GB
+    val swappiness: Int = 100, // 0 - 200
+    val zramSizeGb: Int = 8, // 0 = Off, 4, 6, 8, 10, 12 GB
+    val zramAlgorithm: String = "lz4", // lz4, zstd, lzo-rle, lz4hc
+    val vfsCachePressure: Int = 100, // 50 - 150
+    val pageCluster: Int = 0, // 0 (Zero Latency Flash/zRAM), 1, 2, 3
+    val dirtyRatio: Int = 20, // 10 - 40 %
+    val dirtyBackgroundRatio: Int = 10, // 5 - 20 %
+    val totalRamMb: Int = 12288,
+    val usedRamMb: Int = 5840,
+    val zramUsedMb: Int = 2140,
+    val lastDropCacheFeedback: String? = null
 )
 
 data class DisplayTweakConfig(

@@ -151,11 +151,6 @@ class FloatingOverlayService : Service() {
                         val tv = createTextRow("RAM: 6.4 / 12 GB", 0xFFBB86FC.toInt())
                         container.addView(tv)
                     }
-                    if (cfg.showDrainRate) {
-                        val drainText = if (battery.isCharging) "+%.1fW".format(battery.chargeSpeedWatts) else "-%dmA".format(battery.dischargeRateMa)
-                        val tv = createTextRow("DRAIN: $drainText", 0xFFFFFFFF.toInt())
-                        container.addView(tv)
-                    }
                 }
 
                 delay(1000L)
