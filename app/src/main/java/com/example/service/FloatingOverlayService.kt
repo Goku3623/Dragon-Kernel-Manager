@@ -53,14 +53,6 @@ class FloatingOverlayService : Service() {
     private fun setupOverlayView() {
         val wm = windowManager ?: return
 
-        val dm = getSystemService(Context.DISPLAY_SERVICE) as? android.hardware.display.DisplayManager
-        val defaultDisplay = dm?.getDisplay(android.view.Display.DEFAULT_DISPLAY)
-        val activeMode = defaultDisplay?.mode
-        val peakMode = defaultDisplay?.supportedModes
-            ?.filter { activeMode == null || (it.physicalWidth == activeMode.physicalWidth && it.physicalHeight == activeMode.physicalHeight) }
-            ?.maxByOrNull { it.refreshRate }
-            ?: defaultDisplay?.supportedModes?.maxByOrNull { it.refreshRate }
-
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -78,11 +70,6 @@ class FloatingOverlayService : Service() {
             gravity = Gravity.TOP or Gravity.START
             x = 40
             y = 120
-            // Prevent overlay window from down-voting the whole-device refresh rate to 60Hz
-            if (peakMode != null && peakMode.refreshRate > 60.5f) {
-                preferredDisplayModeId = peakMode.modeId
-                preferredRefreshRate = peakMode.refreshRate
-            }
         }
 
         val container = LinearLayout(this).apply {

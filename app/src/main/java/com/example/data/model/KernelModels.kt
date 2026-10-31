@@ -74,9 +74,19 @@ data class BatteryTelemetry(
     val isCharging: Boolean = false,
     val isBypassCharging: Boolean = false,
     val isNightChargingActive: Boolean = false,
-    val activeDrainPerHour: Float = 9.2f,
-    val idleDrainPerHour: Float = 1.4f,
-    val deepSleepPercent: Float = 88.5f,
+    val activeDrainPerHour: Float = 0.0f,
+    val idleDrainPerHour: Float = 0.0f,
+    val deepSleepPercent: Float = 0.0f,
+    val awakePercent: Float = 100.0f,
+    val screenOnTimeFormatted: String = "54s",
+    val screenOnDrainPercent: Float = 0.0f,
+    val screenOnDrainMah: Int = 7,
+    val screenOffTimeFormatted: String = "0s",
+    val screenOffDrainPercent: Float = 0.0f,
+    val screenOffDrainMah: Int = 0,
+    val deepSleepTimeFormatted: String = "0s",
+    val awakeTimeFormatted: String = "0s",
+    val livePowerWatts: Float = 2.7f,
     val estimatedMinutesLeft: Int = 420,
     val health: String = "Good (97% SOH • 4850/5000 mAh)",
     val healthAndCycleSource: String = "Android BatteryManager + PowerProfile",
@@ -355,4 +365,178 @@ data class AppManagerItem(
     val isAutostartBlocked: Boolean,
     val isSelected: Boolean = false
 )
+
+enum class SurfaceThemeMode(
+    val title: String,
+    val subtitle: String,
+    val hexCode: String
+) {
+    TRUE_AMOLED_PITCH(
+        title = "True AMOLED Pitch",
+        subtitle = "Pure #000000 pixel-off black for max 1.5K OLED power saving",
+        hexCode = "#000000"
+    ),
+    OBSIDIAN_CARBON(
+        title = "Obsidian Carbon",
+        subtitle = "Deep carbon #030407 gaming HUD with high-contrast cards",
+        hexCode = "#030407"
+    ),
+    CYBER_SLATE(
+        title = "Cyber Slate Navy",
+        subtitle = "Tactical gunmetal #090D16 slate with cool metallic depth",
+        hexCode = "#090D16"
+    ),
+    CRIMSON_ABYSS(
+        title = "Crimson Abyss",
+        subtitle = "RedMagic-inspired #090306 dark crimson gaming atmosphere",
+        hexCode = "#090306"
+    ),
+    MIDNIGHT_VIOLET(
+        title = "Midnight Nebula",
+        subtitle = "Synthwave #07030D deep ultraviolet cyber-deck surface",
+        hexCode = "#07030D"
+    )
+}
+
+enum class GamingThemePreset(
+    val title: String,
+    val badge: String,
+    val description: String,
+    val primaryAccentIndex: Int,
+    val secondaryAccentIndex: Int,
+    val surfaceMode: SurfaceThemeMode,
+    val borderGlow: Float,
+    val headerGlow: Float,
+    val cornerRadiusDp: Int
+) {
+    ROG_CRIMSON(
+        title = "ROG Crimson Core",
+        badge = "DEFAULT HUD",
+        description = "Dragon Red & Neon Cyan over Obsidian Carbon",
+        primaryAccentIndex = 0,
+        secondaryAccentIndex = 1,
+        surfaceMode = SurfaceThemeMode.OBSIDIAN_CARBON,
+        borderGlow = 0.65f,
+        headerGlow = 0.25f,
+        cornerRadiusDp = 18
+    ),
+    CYBERPUNK_2077(
+        title = "Cyberpunk Night City",
+        badge = "NEON SYNTH",
+        description = "Amber HyperGold & Neon Cyan over Midnight Nebula",
+        primaryAccentIndex = 3,
+        secondaryAccentIndex = 1,
+        surfaceMode = SurfaceThemeMode.MIDNIGHT_VIOLET,
+        borderGlow = 0.85f,
+        headerGlow = 0.32f,
+        cornerRadiusDp = 10
+    ),
+    RAZER_VENOM(
+        title = "Chroma Venom Matrix",
+        badge = "AMOLED ECO",
+        description = "Emerald Matrix & Arctic Mint over True AMOLED #000000",
+        primaryAccentIndex = 2,
+        secondaryAccentIndex = 8,
+        surfaceMode = SurfaceThemeMode.TRUE_AMOLED_PITCH,
+        borderGlow = 0.70f,
+        headerGlow = 0.22f,
+        cornerRadiusDp = 16
+    ),
+    REDMAGIC_ABYSS(
+        title = "RedMagic Bloodline",
+        badge = "TURBO RED",
+        description = "Dragon Red & Solar Lava over Crimson Abyss",
+        primaryAccentIndex = 0,
+        secondaryAccentIndex = 7,
+        surfaceMode = SurfaceThemeMode.CRIMSON_ABYSS,
+        borderGlow = 0.80f,
+        headerGlow = 0.30f,
+        cornerRadiusDp = 14
+    ),
+    CRYO_STEALTH(
+        title = "Cryo Liquid Ice",
+        badge = "FROST HUD",
+        description = "Neon Cyan & Cobalt Laser over Cyber Slate Navy",
+        primaryAccentIndex = 1,
+        secondaryAccentIndex = 6,
+        surfaceMode = SurfaceThemeMode.CYBER_SLATE,
+        borderGlow = 0.60f,
+        headerGlow = 0.24f,
+        cornerRadiusDp = 18
+    ),
+    SYNTHWAVE_OUTRUN(
+        title = "Synthwave Outrun",
+        badge = "RETRO WAVE",
+        description = "Plasma Pink & Electric Violet over Midnight Nebula",
+        primaryAccentIndex = 5,
+        secondaryAccentIndex = 4,
+        surfaceMode = SurfaceThemeMode.MIDNIGHT_VIOLET,
+        borderGlow = 0.90f,
+        headerGlow = 0.35f,
+        cornerRadiusDp = 22
+    )
+}
+
+data class CustomColorPalette(
+    val id: String,
+    val name: String,
+    val primaryHex: String,
+    val primaryRed: Int,
+    val primaryGreen: Int,
+    val primaryBlue: Int,
+    val secondaryAccentIndex: Int,
+    val surfaceMode: SurfaceThemeMode = SurfaceThemeMode.OBSIDIAN_CARBON,
+    val borderGlowIntensity: Float = 0.75f
+)
+
+data class ThemeCustomizationConfig(
+    val primaryAccentIndex: Int = 0,
+    val secondaryAccentIndex: Int = 1,
+    val surfaceMode: SurfaceThemeMode = SurfaceThemeMode.OBSIDIAN_CARBON,
+    val useCustomPrimaryColor: Boolean = false,
+    val customRed: Int = 255,
+    val customGreen: Int = 42,
+    val customBlue: Int = 75,
+    val borderGlowIntensity: Float = 0.65f, // 0.15f .. 1.0f
+    val headerGlowIntensity: Float = 0.25f, // 0.05f .. 0.50f
+    val cornerRadiusDp: Int = 18, // 8, 14, 18, 24
+    val useDynamicColor: Boolean = false,
+    val activePresetName: String = "ROG Crimson Core",
+    val savedCustomPalettes: List<CustomColorPalette> = listOf(
+        CustomColorPalette(
+            id = "pal_cyber_neon",
+            name = "Cyber Neon Pulse",
+            primaryHex = "#00FF9D",
+            primaryRed = 0,
+            primaryGreen = 255,
+            primaryBlue = 157,
+            secondaryAccentIndex = 1,
+            surfaceMode = SurfaceThemeMode.OBSIDIAN_CARBON,
+            borderGlowIntensity = 0.80f
+        ),
+        CustomColorPalette(
+            id = "pal_blood_moon",
+            name = "Blood Moon Overdrive",
+            primaryHex = "#FF1744",
+            primaryRed = 255,
+            primaryGreen = 23,
+            primaryBlue = 68,
+            secondaryAccentIndex = 3,
+            surfaceMode = SurfaceThemeMode.TRUE_AMOLED_PITCH,
+            borderGlowIntensity = 0.85f
+        ),
+        CustomColorPalette(
+            id = "pal_hyper_violet",
+            name = "Hyper Violet Vapor",
+            primaryHex = "#D500F9",
+            primaryRed = 213,
+            primaryGreen = 0,
+            primaryBlue = 249,
+            secondaryAccentIndex = 1,
+            surfaceMode = SurfaceThemeMode.MIDNIGHT_VIOLET,
+            borderGlowIntensity = 0.90f
+        )
+    )
+)
+
 

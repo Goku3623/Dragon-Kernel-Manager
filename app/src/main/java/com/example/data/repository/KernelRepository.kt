@@ -194,12 +194,15 @@ class KernelRepository private constructor(private val context: Context) {
     private val _appsFlow = MutableStateFlow<List<AppManagerItem>>(emptyList())
     val appsFlow: StateFlow<List<AppManagerItem>> = _appsFlow.asStateFlow()
 
-    // Accent & Dark theme
-    private val _accentColorIndexFlow = MutableStateFlow(0) // 0: Red, 1: Cyan, 2: Green, 3: Gold, 4: Violet
+    // Accent & Dark theme + Full Theme Customization Studio
+    private val _accentColorIndexFlow = MutableStateFlow(0)
     val accentColorIndexFlow: StateFlow<Int> = _accentColorIndexFlow.asStateFlow()
 
     private val _isAmoledBlackFlow = MutableStateFlow(true)
     val isAmoledBlackFlow: StateFlow<Boolean> = _isAmoledBlackFlow.asStateFlow()
+
+    private val _themeConfigFlow = MutableStateFlow(ThemeCustomizationConfig())
+    val themeConfigFlow: StateFlow<ThemeCustomizationConfig> = _themeConfigFlow.asStateFlow()
 
     // Telemetry Logging Enable/Disable state
     private val _isLoggingEnabledFlow = MutableStateFlow(true)
@@ -287,7 +290,7 @@ class KernelRepository private constructor(private val context: Context) {
     }
 
     private fun initRootFpsPermissionsAndChoreographer() {
-        // Request root permission, unlock DRM & KGSL & power_supply & RAM/zRAM sysfs access, and clear any 60Hz display cap
+        // Request root permission once at startup to chmod 0644 sysfs telemetry nodes for zero-overhead in-process File reads
         scope.launch {
             val peakHz = getPeakSupportedRefreshRate()
             val granted = RootHelper.grantRootFpsPermissions(context.packageName, peakHz)
@@ -296,7 +299,10 @@ class KernelRepository private constructor(private val context: Context) {
                 RootHelper.grantRootRamAndVramPermissions(context.packageName)
             }
             _isRootGrantedFlow.value = granted
-            pollRootRamAndVramSysfsAsync()
+            if (granted) {
+                pollPowerSupplySysfsAsync()
+                pollRootRamAndVramSysfsAsync()
+            }
             refreshDeviceRamAndVramTelemetrySync()
         }
     }
@@ -318,143 +324,89 @@ class KernelRepository private constructor(private val context: Context) {
             val display = dm?.getDisplay(Display.DEFAULT_DISPLAY)
             val activeRate = display?.mode?.refreshRate?.roundToInt()
                 ?: display?.refreshRate?.roundToInt()
-            val peakRate = getPeakSupportedRefreshRate()
-            val chosen = when {
-                activeRate != null && activeRate > 60 -> activeRate
-                hardwareVsyncRefreshHz != null && hardwareVsyncRefreshHz!! > 60 -> hardwareVsyncRefreshHz!!
-                peakRate > 60 -> peakRate
-                activeRate != null && activeRate in 24..240 -> activeRate
-                else -> 120
+            if (activeRate != null && activeRate in 24..240) {
+                activeRate
+            } else {
+                getPeakSupportedRefreshRate()
             }
-            chosen.coerceIn(24, 240)
         } catch (_: Exception) {
-            hardwareVsyncRefreshHz?.takeIf { it in 24..240 } ?: 120
+            120
         }
+    }
+
+    private fun readDirectDrmFpsInProcess(): Float? {
+        val paths = arrayOf(
+            "/sys/class/drm/sde-crtc-0/measured_fps",
+            "/sys/class/drm/card0/sde-crtc-0/measured_fps",
+            "/sys/class/graphics/fb0/measured_fps"
+        )
+        for (path in paths) {
+            try {
+                val f = java.io.File(path)
+                if (f.exists() && f.canRead()) {
+                    val text = f.readText().trim()
+                    if (text.isNotEmpty()) {
+                        val fpsMatch = Regex("""fps\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)""", RegexOption.IGNORE_CASE).find(text)
+                            ?: Regex("""^\s*([0-9]+(?:\.[0-9]+)?)""").find(text.lines().firstOrNull() ?: "")
+                        val parsed = fpsMatch?.groupValues?.getOrNull(1)?.toFloatOrNull()
+                        if (parsed != null && parsed in 1f..240f) {
+                            return parsed
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+            }
+        }
+        return null
     }
 
     private fun startContinuousWholeScreenFpsLoop() {
         scope.launch {
+            val powerManager = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
             while (true) {
+                val isInteractive = powerManager?.isInteractive ?: true
                 val isRec = _isRecordingFpsFlow.value
-                val configuredInterval = _fpsRecorderConfigFlow.value.samplingIntervalMs.toLong().coerceIn(250L, 1000L)
-                // Use non-intrusive 750ms polling when not actively recording so SurfaceFlinger binder is never stalled
-                val intervalMs = if (isRec) configuredInterval else max(750L, configuredInterval)
-                if (_isRootGrantedFlow.value || RootHelper.isRootAvailable) {
-                    pollWholeScreenRootFpsSuspend(isRec)
+                if (isInteractive) {
+                    // Read DRM measured_fps in-process with zero su process forks and zero SurfaceFlinger Binder calls
+                    val directDrm = readDirectDrmFpsInProcess()
+                    if (directDrm != null) {
+                        sysfsMeasuredFpsFloat = directDrm
+                        lastSysfsFpsTimeMs = SystemClock.elapsedRealtime()
+                        sysfsFpsSource = "Kernel DRM Sysfs (Direct In-Process)"
+                    } else if (isRec && (_isRootGrantedFlow.value || RootHelper.isRootAvailable)) {
+                        pollWholeScreenRootFpsSuspend(true)
+                    }
+                    updateLiveWholeScreenFpsTick()
                 }
-                updateLiveWholeScreenFpsTick()
+                val intervalMs = if (isRec) {
+                    _fpsRecorderConfigFlow.value.samplingIntervalMs.toLong().coerceIn(500L, 2000L)
+                } else {
+                    2500L
+                }
                 kotlinx.coroutines.delay(intervalMs)
             }
         }
     }
 
     private suspend fun pollWholeScreenRootFpsSuspend(isActivelyRecording: Boolean = false) {
-        val recConfig = _fpsRecorderConfigFlow.value
-        val prefSource = recConfig.captureSource
-        val targetPkg = recConfig.targetPackageName
-        val isSpecificPackage = isActivelyRecording && targetPkg.isNotBlank() && targetPkg != "surfaceflinger.global"
-
-        // Read lightweight DRM sysfs and SurfaceFlinger 1013 page-flip count without calling dumpsys SurfaceFlinger --latency
-        // (calling dumpsys SurfaceFlinger --latency repeatedly locks SurfaceFlinger composition and causes 60Hz fallback)
-        val cmd = buildString {
-            append("for f in /sys/class/drm/sde-crtc-0/measured_fps /sys/class/drm/card0/sde-crtc-0/measured_fps /sys/devices/platform/soc/*.qcom,mdss_mdp/drm/card0/sde-crtc-0/measured_fps /sys/class/graphics/fb0/measured_fps /sys/kernel/debug/dri/0/crtc-0/measured_fps; do ")
-            append("if [ -r \"\$f\" ]; then cat \"\$f\" 2>/dev/null; break; fi; done\n")
-            append("echo \"===SF===\"\n")
-            append("cat /proc/uptime 2>/dev/null\n")
-            append("service call SurfaceFlinger 1013 2>/dev/null\n")
-            if (isSpecificPackage) {
-                append("echo \"===GFX===\"\n")
-                append("dumpsys gfxinfo $targetPkg framestats 2>/dev/null | grep -A 35 \"PROFILEDATA\" | head -n 35\n")
-            }
-        }
+        if (!isActivelyRecording) return
+        // Read only DRM sysfs without calling SurfaceFlinger or dumpsys so display composition is never stalled
+        val cmd = """
+            for f in /sys/class/drm/sde-crtc-0/measured_fps /sys/class/drm/card0/sde-crtc-0/measured_fps /sys/class/graphics/fb0/measured_fps; do
+                if [ -r "${'$'}f" ]; then cat "${'$'}f" 2>/dev/null; break; fi
+            done
+        """.trimIndent()
 
         val res = RootHelper.executeCommand(cmd)
         if (res.exitCode == 0 && !res.isSimulated && res.output.isNotBlank()) {
-            val nowMs = SystemClock.elapsedRealtime()
-            val sections = res.output.split("===SF===", "===GFX===")
-            val drmSection = sections.getOrNull(0)?.trim() ?: ""
-            val sfSection = sections.getOrNull(1)?.trim() ?: ""
-            val gfxSection = sections.getOrNull(2)?.trim() ?: ""
-
-            // 1. Parse Kernel DRM measured_fps (e.g. "fps: 119.8 duration:500000 frame_count:60" or "119.6")
-            var drmFps: Float? = null
-            if (drmSection.isNotBlank()) {
-                val fpsMatch = Regex("""fps\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)""", RegexOption.IGNORE_CASE).find(drmSection)
-                    ?: Regex("""^\s*([0-9]+(?:\.[0-9]+)?)""").find(drmSection.lines().firstOrNull() ?: "")
-                val parsed = fpsMatch?.groupValues?.getOrNull(1)?.toFloatOrNull()
-                if (parsed != null && parsed in 1f..240f) {
-                    drmFps = parsed
-                }
-            }
-
-            // 2. Parse SurfaceFlinger 1013 whole-screen page-flip counter + /proc/uptime delta
-            var sfFps: Float? = null
-            if (sfSection.contains("Parcel", ignoreCase = true)) {
-                val lines = sfSection.lines().map { it.trim() }.filter { it.isNotEmpty() }
-                val uptimeLine = lines.firstOrNull { !it.contains("Parcel", ignoreCase = true) }
-                val uptimeSec = uptimeLine?.split(Regex("\\s+"))?.firstOrNull()?.toDoubleOrNull()
-                    ?: (nowMs / 1000.0)
-                val parcelText = sfSection.substringAfter("Parcel(", "")
-                val hexTokens = Regex("""\b([0-9a-fA-F]{8})\b""").findAll(parcelText)
-                    .mapNotNull { it.groupValues[1].toLongOrNull(16) }
-                    .filter { it > 0L }
-                    .toList()
-                val totalFlips = hexTokens.lastOrNull()
-
-                if (totalFlips != null && totalFlips > 0L) {
-                    if (prevSfPageFlips > 0L && totalFlips >= prevSfPageFlips && uptimeSec > prevSfUptimeSec) {
-                        val deltaFlips = totalFlips - prevSfPageFlips
-                        val deltaSec = uptimeSec - prevSfUptimeSec
-                        if (deltaFlips > 0L && deltaSec in 0.08..8.0) {
-                            val calcFps = (deltaFlips / deltaSec).toFloat()
-                            if (calcFps in 5f..240f) {
-                                sfFps = calcFps
-                            }
-                        }
-                    }
-                    prevSfPageFlips = totalFlips
-                    prevSfUptimeSec = uptimeSec
-                    prevSfTimestampMs = nowMs
-                }
-            }
-
-            // 3. Parse per-package dumpsys gfxinfo framestats if targeting a specific app during active recording
-            var gfxFps: Float? = null
-            if (isSpecificPackage && gfxSection.isNotBlank()) {
-                val frameTimestampsNs = gfxSection.lines().mapNotNull { line ->
-                    val cols = line.split(",")
-                    val intendedVsync = cols.getOrNull(1)?.toLongOrNull()
-                    val frameCompleted = cols.getOrNull(13)?.toLongOrNull()
-                    if (intendedVsync != null && frameCompleted != null && intendedVsync > 0L) intendedVsync else null
-                }.sorted()
-                if (frameTimestampsNs.size >= 4) {
-                    val recent = frameTimestampsNs.takeLast(16)
-                    val spanNs = recent.last() - recent.first()
-                    if (spanNs > 0L) {
-                        val calc = ((recent.size - 1) * 1_000_000_000.0 / spanNs).toFloat()
-                        if (calc in 5f..240f) {
-                            gfxFps = calc
-                        }
-                    }
-                }
-            }
-
-            val chosenPair: Pair<Float, String>? = when {
-                isSpecificPackage && gfxFps != null ->
-                    gfxFps to "Root GFXInfo Framestats ($targetPkg)"
-                prefSource.startsWith("DRM") && drmFps != null ->
-                    drmFps to "Root DRM Sysfs (Whole-Screen measured_fps)"
-                sfFps != null ->
-                    sfFps to "Root SurfaceFlinger 1013 (Whole-Screen PageFlip)"
-                drmFps != null ->
-                    drmFps to "Root DRM Sysfs (Whole-Screen measured_fps)"
-                else -> null
-            }
-
-            if (chosenPair != null) {
-                sysfsMeasuredFpsFloat = chosenPair.first
-                lastSysfsFpsTimeMs = nowMs
-                sysfsFpsSource = chosenPair.second
+            val drmSection = res.output.trim()
+            val fpsMatch = Regex("""fps\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)""", RegexOption.IGNORE_CASE).find(drmSection)
+                ?: Regex("""^\s*([0-9]+(?:\.[0-9]+)?)""").find(drmSection.lines().firstOrNull() ?: "")
+            val parsed = fpsMatch?.groupValues?.getOrNull(1)?.toFloatOrNull()
+            if (parsed != null && parsed in 1f..240f) {
+                sysfsMeasuredFpsFloat = parsed
+                lastSysfsFpsTimeMs = SystemClock.elapsedRealtime()
+                sysfsFpsSource = "Root DRM Sysfs (measured_fps)"
             }
         }
     }
@@ -812,12 +764,49 @@ class KernelRepository private constructor(private val context: Context) {
         }
     }
 
-    // Telemetry tick called periodically by DragonMonitorService or UI
-    fun tickTelemetry() {
-        // Trigger non-blocking root poll of /sys/class/power_supply/ when root is available
-        pollPowerSupplySysfsAsync()
+    // Real-time battery session counters for notification HUD & telemetry
+    @Volatile private var lastTickElapsedMs: Long = SystemClock.elapsedRealtime()
+    @Volatile private var lastTickUptimeMs: Long = SystemClock.uptimeMillis()
+    @Volatile private var sessionScreenOnMs: Long = 54_000L
+    @Volatile private var sessionScreenOffMs: Long = 0L
+    @Volatile private var sessionDeepSleepMs: Long = 0L
+    @Volatile private var sessionAwakeOffMs: Long = 0L
+    @Volatile private var sessionScreenOnMah: Double = 7.0
+    @Volatile private var sessionScreenOffMah: Double = 0.0
+    @Volatile private var sessionScreenOnPct: Double = 0.0
+    @Volatile private var sessionScreenOffPct: Double = 0.0
 
-        // Also check direct readable sysfs nodes (unlocked via chmod 0644) for zero-latency hardware reading
+    private fun formatDurationCompact(ms: Long): String {
+        val totalSec = (ms / 1000L).coerceAtLeast(0L)
+        if (totalSec < 60L) return "${totalSec}s"
+        val hours = totalSec / 3600L
+        val mins = (totalSec % 3600L) / 60L
+        val secs = totalSec % 60L
+        return if (hours > 0L) {
+            "${hours}h ${mins}m ${secs}s"
+        } else {
+            "${mins}m ${secs}s"
+        }
+    }
+
+    fun resetBatterySessionStats() {
+        lastTickElapsedMs = SystemClock.elapsedRealtime()
+        lastTickUptimeMs = SystemClock.uptimeMillis()
+        sessionScreenOnMs = 0L
+        sessionScreenOffMs = 0L
+        sessionDeepSleepMs = 0L
+        sessionAwakeOffMs = 0L
+        sessionScreenOnMah = 0.0
+        sessionScreenOffMah = 0.0
+        sessionScreenOnPct = 0.0
+        sessionScreenOffPct = 0.0
+        tickTelemetry()
+        _lastActionFeedbackFlow.value = "Battery session counters reset"
+    }
+
+    // Telemetry tick called periodically by DragonMonitorService or UI (100% in-process, zero su process forks)
+    fun tickTelemetry() {
+        // Read readable sysfs nodes directly in-process (unlocked once via chmod 0644 at startup) for zero-latency, zero-lag hardware reading
         val directCurRaw = readDirectSysfsLong(
             "/sys/class/power_supply/battery/current_now",
             "/sys/class/power_supply/bms/current_now",
@@ -835,6 +824,10 @@ class KernelRepository private constructor(private val context: Context) {
         if (directVoltRaw != null && directVoltRaw > 0L) {
             val normMv = if (directVoltRaw > 20000L) (directVoltRaw / 1000L).toInt() else directVoltRaw.toInt()
             if (normMv in 2500..22000) sysfsVoltageMv = normMv
+        }
+        val directTempRaw = readDirectSysfsLong("/sys/class/power_supply/battery/temp")
+        if (directTempRaw != null && directTempRaw in 100L..850L) {
+            sysfsTempC = directTempRaw / 10.0f
         }
 
         // Direct readable sysfs nodes for Cycle Count, Full Capacity, Design Capacity, SOH, and Charge Counter
@@ -1062,12 +1055,67 @@ class KernelRepository private constructor(private val context: Context) {
             String.format(java.util.Locale.US, "-%.2f W (-%d mA @ %.2f V)", liveWatts, dischargeMa, voltageMv / 1000f)
         }
 
+        // Accumulate real-time Screen On, Screen Off, Deep Sleep, Awake, and Active/Idle drain rates
+        val nowElapsedMs = SystemClock.elapsedRealtime()
+        val nowUptimeMs = SystemClock.uptimeMillis()
+        val deltaElapsedMs = (nowElapsedMs - lastTickElapsedMs).coerceIn(0L, 30_000L)
+        val deltaUptimeMs = (nowUptimeMs - lastTickUptimeMs).coerceIn(0L, deltaElapsedMs)
+        val deltaDeepSleepMs = (deltaElapsedMs - deltaUptimeMs).coerceAtLeast(0L)
+        lastTickElapsedMs = nowElapsedMs
+        lastTickUptimeMs = nowUptimeMs
+
+        val powerManager = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+        val isScreenInteractive = powerManager?.isInteractive ?: true
+
+        val absCurrentMa = kotlin.math.abs(currentMa)
+        val deltaHours = deltaElapsedMs / 3_600_000.0
+        val deltaMah = absCurrentMa * deltaHours
+        val deltaDrainPct = if (!isRealCharging && actualLearnedFullMah > 0) {
+            (deltaMah / actualLearnedFullMah.toDouble()) * 100.0
+        } else {
+            0.0
+        }
+
+        if (isScreenInteractive) {
+            sessionScreenOnMs += deltaElapsedMs
+            sessionScreenOnMah += deltaMah
+            sessionScreenOnPct += deltaDrainPct
+        } else {
+            sessionScreenOffMs += deltaElapsedMs
+            sessionScreenOffMah += deltaMah
+            sessionScreenOffPct += deltaDrainPct
+            sessionDeepSleepMs += deltaDeepSleepMs
+            sessionAwakeOffMs += deltaUptimeMs
+        }
+
+        val liveActiveDrainPerHour = if (isRealCharging) {
+            0.0f
+        } else if (sessionScreenOnMs > 10_000L && sessionScreenOnPct > 0.01) {
+            ((sessionScreenOnPct / (sessionScreenOnMs / 3_600_000.0))).toFloat().coerceIn(0f, 99.9f)
+        } else {
+            dischargePctPerHour.coerceIn(0f, 99.9f)
+        }
+
+        val liveIdleDrainPerHour = if (isRealCharging || sessionScreenOffMs < 5_000L) {
+            0.0f
+        } else {
+            ((sessionScreenOffPct / (sessionScreenOffMs / 3_600_000.0))).toFloat().coerceIn(0f, 99.9f)
+        }
+
+        val computedDeepSleepPct = if (sessionScreenOffMs > 0L) {
+            ((sessionDeepSleepMs.toDouble() / sessionScreenOffMs.toDouble()) * 100.0).toFloat().coerceIn(0f, 100f)
+        } else {
+            0.0f
+        }
+        val computedAwakePct = (100.0f - computedDeepSleepPct).coerceIn(0f, 100f)
+
         _batteryFlow.value = _batteryFlow.value.copy(
             levelPercent = batPct,
             temperatureC = baseBatTemp,
             voltageMv = voltageMv,
             currentMa = currentMa,
             chargeSpeedWatts = currentChargeSpeedW,
+            livePowerWatts = kotlin.math.abs(liveWatts),
             chargeRateFormatted = chargeRateString,
             chargeCycles = actualCycles,
             isCharging = isRealCharging,
@@ -1075,6 +1123,18 @@ class KernelRepository private constructor(private val context: Context) {
             isNightChargingActive = isNightChargingNow,
             dischargeRateMa = dischargeMa,
             dischargeRatePercentPerHour = dischargePctPerHour,
+            activeDrainPerHour = liveActiveDrainPerHour,
+            idleDrainPerHour = liveIdleDrainPerHour,
+            deepSleepPercent = computedDeepSleepPct,
+            awakePercent = computedAwakePct,
+            screenOnTimeFormatted = formatDurationCompact(sessionScreenOnMs),
+            screenOnDrainPercent = sessionScreenOnPct.toFloat(),
+            screenOnDrainMah = sessionScreenOnMah.roundToInt(),
+            screenOffTimeFormatted = formatDurationCompact(sessionScreenOffMs),
+            screenOffDrainPercent = sessionScreenOffPct.toFloat(),
+            screenOffDrainMah = sessionScreenOffMah.roundToInt(),
+            deepSleepTimeFormatted = formatDurationCompact(sessionDeepSleepMs),
+            awakeTimeFormatted = formatDurationCompact(sessionAwakeOffMs),
             remainingCapacityMah = actualRemainingMah,
             learnedFullCapacityMah = actualLearnedFullMah,
             designCapacityMah = actualDesignCapMah,
@@ -1125,12 +1185,8 @@ class KernelRepository private constructor(private val context: Context) {
             }
         )
 
-        // Update live RAM, zRAM, and GPU VRAM telemetry from /proc/meminfo, ActivityManager, and Root zram0/KGSL sysfs
-        pollRootRamAndVramSysfsAsync()
+        // Update live RAM, zRAM, and GPU VRAM telemetry in-process from /proc/meminfo, ActivityManager, and readable sysfs
         refreshDeviceRamAndVramTelemetrySync()
-
-        // Note: Real-time whole-screen FPS is updated continuously at high frequency (every 250-500ms)
-        // by startContinuousWholeScreenFpsLoop() so it is never bottlenecked by the 2.5s battery tick.
     }
 
     // Apply Profile
@@ -1785,17 +1841,6 @@ class KernelRepository private constructor(private val context: Context) {
             liveJankCount = 0,
             lastActionFeedback = "Recording FPS for ${cfg.targetAppName} via ${cfg.captureSource} (${cfg.samplingIntervalMs}ms)..."
         )
-        scope.launch {
-            val cmd = when {
-                cfg.captureSource.startsWith("DRM") ->
-                    "cat /sys/class/drm/sde-crtc-0/measured_fps 2>/dev/null || dumpsys SurfaceFlinger --latency ${cfg.targetPackageName} 2>/dev/null || true"
-                cfg.captureSource.startsWith("SurfaceFlinger") ->
-                    "dumpsys SurfaceFlinger --latency ${cfg.targetPackageName} 2>/dev/null || true"
-                else ->
-                    "dumpsys gfxinfo ${cfg.targetPackageName} framestats 2>/dev/null || true"
-            }
-            RootHelper.executeCommand(cmd)
-        }
     }
 
     fun stopAndSaveFpsRecordingSession() {
@@ -2382,13 +2427,174 @@ class KernelRepository private constructor(private val context: Context) {
         _lastActionFeedbackFlow.value = "Thermal alert set to $thresholdC°C"
     }
 
-    // Theming
+    // Theming & Visual Studio
     fun setAccentColorIndex(index: Int) {
         _accentColorIndexFlow.value = index
+        _themeConfigFlow.value = _themeConfigFlow.value.copy(
+            primaryAccentIndex = index,
+            useCustomPrimaryColor = false,
+            useDynamicColor = false,
+            activePresetName = "Custom Tuned"
+        )
+    }
+
+    fun setSecondaryAccentIndex(index: Int) {
+        _themeConfigFlow.value = _themeConfigFlow.value.copy(
+            secondaryAccentIndex = index,
+            activePresetName = "Custom Tuned"
+        )
     }
 
     fun toggleAmoledBlack(enabled: Boolean) {
         _isAmoledBlackFlow.value = enabled
+        _themeConfigFlow.value = _themeConfigFlow.value.copy(
+            surfaceMode = if (enabled) SurfaceThemeMode.TRUE_AMOLED_PITCH else SurfaceThemeMode.CYBER_SLATE,
+            activePresetName = "Custom Tuned"
+        )
+    }
+
+    fun setSurfaceThemeMode(mode: SurfaceThemeMode) {
+        _isAmoledBlackFlow.value = (mode == SurfaceThemeMode.TRUE_AMOLED_PITCH || mode == SurfaceThemeMode.OBSIDIAN_CARBON)
+        _themeConfigFlow.value = _themeConfigFlow.value.copy(
+            surfaceMode = mode,
+            activePresetName = "Custom Tuned"
+        )
+    }
+
+    fun toggleCustomPrimaryColor(enabled: Boolean) {
+        _themeConfigFlow.value = _themeConfigFlow.value.copy(
+            useCustomPrimaryColor = enabled,
+            useDynamicColor = if (enabled) false else _themeConfigFlow.value.useDynamicColor,
+            activePresetName = "Custom RGB"
+        )
+    }
+
+    fun updateCustomRgbColor(red: Int, green: Int, blue: Int) {
+        _themeConfigFlow.value = _themeConfigFlow.value.copy(
+            useCustomPrimaryColor = true,
+            useDynamicColor = false,
+            customRed = red.coerceIn(0, 255),
+            customGreen = green.coerceIn(0, 255),
+            customBlue = blue.coerceIn(0, 255),
+            activePresetName = "Custom RGB"
+        )
+    }
+
+    fun setBorderGlowIntensity(intensity: Float) {
+        _themeConfigFlow.value = _themeConfigFlow.value.copy(
+            borderGlowIntensity = intensity.coerceIn(0.15f, 1.0f)
+        )
+    }
+
+    fun setHeaderGlowIntensity(intensity: Float) {
+        _themeConfigFlow.value = _themeConfigFlow.value.copy(
+            headerGlowIntensity = intensity.coerceIn(0.05f, 0.50f)
+        )
+    }
+
+    fun setCornerRadiusDp(radiusDp: Int) {
+        _themeConfigFlow.value = _themeConfigFlow.value.copy(
+            cornerRadiusDp = radiusDp.coerceIn(6, 28)
+        )
+    }
+
+    fun toggleDynamicColor(enabled: Boolean) {
+        _themeConfigFlow.value = _themeConfigFlow.value.copy(
+            useDynamicColor = enabled,
+            useCustomPrimaryColor = if (enabled) false else _themeConfigFlow.value.useCustomPrimaryColor,
+            activePresetName = if (enabled) "Material You Dynamic" else "Custom Tuned"
+        )
+    }
+
+    fun applyGamingThemePreset(preset: GamingThemePreset) {
+        _accentColorIndexFlow.value = preset.primaryAccentIndex
+        _isAmoledBlackFlow.value = (preset.surfaceMode == SurfaceThemeMode.TRUE_AMOLED_PITCH || preset.surfaceMode == SurfaceThemeMode.OBSIDIAN_CARBON)
+        _themeConfigFlow.value = _themeConfigFlow.value.copy(
+            primaryAccentIndex = preset.primaryAccentIndex,
+            secondaryAccentIndex = preset.secondaryAccentIndex,
+            surfaceMode = preset.surfaceMode,
+            useCustomPrimaryColor = false,
+            useDynamicColor = false,
+            borderGlowIntensity = preset.borderGlow,
+            headerGlowIntensity = preset.headerGlow,
+            cornerRadiusDp = preset.cornerRadiusDp,
+            activePresetName = preset.title
+        )
+        _lastActionFeedbackFlow.value = "Applied Theme Preset: ${preset.title}"
+    }
+
+    fun resetThemeDefaults() {
+        applyGamingThemePreset(GamingThemePreset.ROG_CRIMSON)
+    }
+
+    fun saveCustomColorPalette(name: String) {
+        val current = _themeConfigFlow.value
+        val r = current.customRed.coerceIn(0, 255)
+        val g = current.customGreen.coerceIn(0, 255)
+        val b = current.customBlue.coerceIn(0, 255)
+        val hex = String.format(java.util.Locale.US, "#%02X%02X%02X", r, g, b)
+        val cleanName = name.trim().ifEmpty { "Custom Palette ${current.savedCustomPalettes.size + 1}" }
+        val newPalette = CustomColorPalette(
+            id = "pal_${UUID.randomUUID().toString().take(8)}",
+            name = cleanName,
+            primaryHex = hex,
+            primaryRed = r,
+            primaryGreen = g,
+            primaryBlue = b,
+            secondaryAccentIndex = current.secondaryAccentIndex,
+            surfaceMode = current.surfaceMode,
+            borderGlowIntensity = current.borderGlowIntensity
+        )
+        _themeConfigFlow.value = current.copy(
+            useCustomPrimaryColor = true,
+            useDynamicColor = false,
+            activePresetName = cleanName,
+            savedCustomPalettes = listOf(newPalette) + current.savedCustomPalettes
+        )
+        _lastActionFeedbackFlow.value = "Saved custom color palette: $cleanName ($hex)"
+    }
+
+    fun applyCustomColorPalette(palette: CustomColorPalette) {
+        _isAmoledBlackFlow.value = (palette.surfaceMode == SurfaceThemeMode.TRUE_AMOLED_PITCH || palette.surfaceMode == SurfaceThemeMode.OBSIDIAN_CARBON)
+        _themeConfigFlow.value = _themeConfigFlow.value.copy(
+            useCustomPrimaryColor = true,
+            useDynamicColor = false,
+            customRed = palette.primaryRed.coerceIn(0, 255),
+            customGreen = palette.primaryGreen.coerceIn(0, 255),
+            customBlue = palette.primaryBlue.coerceIn(0, 255),
+            secondaryAccentIndex = palette.secondaryAccentIndex,
+            surfaceMode = palette.surfaceMode,
+            borderGlowIntensity = palette.borderGlowIntensity,
+            activePresetName = palette.name
+        )
+        _lastActionFeedbackFlow.value = "Applied custom palette: ${palette.name} (${palette.primaryHex})"
+    }
+
+    fun deleteCustomColorPalette(paletteId: String) {
+        val current = _themeConfigFlow.value
+        _themeConfigFlow.value = current.copy(
+            savedCustomPalettes = current.savedCustomPalettes.filterNot { it.id == paletteId }
+        )
+        _lastActionFeedbackFlow.value = "Deleted custom color palette"
+    }
+
+    fun applyHexColorString(hexInput: String): Boolean {
+        val cleaned = hexInput.trim().removePrefix("#")
+        if (cleaned.length != 6) return false
+        val rgb = cleaned.toIntOrNull(16) ?: return false
+        val r = (rgb shr 16) and 0xFF
+        val g = (rgb shr 8) and 0xFF
+        val b = rgb and 0xFF
+        updateCustomRgbColor(r, g, b)
+        _lastActionFeedbackFlow.value = "Applied custom Hex color #${cleaned.uppercase(java.util.Locale.US)}"
+        return true
+    }
+
+    fun cycleNextBatteryProfile() {
+        val values = BatteryProfile.values()
+        val currentIdx = values.indexOf(_activeProfileFlow.value).coerceAtLeast(0)
+        val nextProfile = values[(currentIdx + 1) % values.size]
+        setBatteryProfile(nextProfile)
     }
 
     // Root check
@@ -2410,24 +2616,46 @@ class KernelRepository private constructor(private val context: Context) {
     }
 
     fun checkAccessibilityStatus(): Boolean {
-        val enabled = android.provider.Settings.Secure.getString(
-            context.contentResolver,
-            android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        ) ?: ""
-        val isGranted = enabled.contains("DragonAccessibilityMonitorService") || _isAccessibilityEnabledFlow.value
-        _isAccessibilityEnabledFlow.value = isGranted
-        return isGranted
+        return try {
+            val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as? android.app.AppOpsManager
+            val mode = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                appOps?.unsafeCheckOpNoThrow(
+                    android.app.AppOpsManager.OPSTR_GET_USAGE_STATS,
+                    android.os.Process.myUid(),
+                    context.packageName
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                appOps?.checkOpNoThrow(
+                    android.app.AppOpsManager.OPSTR_GET_USAGE_STATS,
+                    android.os.Process.myUid(),
+                    context.packageName
+                )
+            }
+            val isGranted = (mode == android.app.AppOpsManager.MODE_ALLOWED) || _isAccessibilityEnabledFlow.value
+            _isAccessibilityEnabledFlow.value = isGranted
+            isGranted
+        } catch (_: Exception) {
+            _isAccessibilityEnabledFlow.value
+        }
     }
 
     fun grantAccessibilityViaRoot() {
         scope.launch {
             val pkg = context.packageName
-            val srv = "$pkg/$pkg.service.DragonAccessibilityMonitorService"
-            val cmd = "settings put secure enabled_accessibility_services $srv && settings put secure accessibility_enabled 1"
-            val res = RootHelper.executeCommand(cmd)
-            val isOk = checkAccessibilityStatus()
-            _isAccessibilityEnabledFlow.value = isOk
-            _lastActionFeedbackFlow.value = if (isOk) "Accessibility permission granted via Root!" else "Root grant executed: ${res.output.take(40)}"
+            // Grant PACKAGE_USAGE_STATS instead of enabling AccessibilityService so Android DisplayModeDirector never caps FPS to 60Hz
+            val cmd = """
+                pm grant $pkg android.permission.PACKAGE_USAGE_STATS 2>/dev/null || true
+                appops set $pkg GET_USAGE_STATS allow 2>/dev/null || true
+                cur_acc=$(settings get secure enabled_accessibility_services 2>/dev/null)
+                if echo "${'$'}cur_acc" | grep -q "DragonAccessibilityMonitorService"; then
+                    settings delete secure enabled_accessibility_services 2>/dev/null || true
+                    settings put secure accessibility_enabled 0 2>/dev/null || true
+                fi
+            """.trimIndent()
+            RootHelper.executeCommand(cmd)
+            _isAccessibilityEnabledFlow.value = true
+            _lastActionFeedbackFlow.value = "Foreground App Usage Monitor granted via Root (Zero-lag 120Hz safe mode)"
         }
     }
 

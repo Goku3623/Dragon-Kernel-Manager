@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -19,6 +22,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.repository.KernelRepository
 import com.example.ui.theme.DangerRed
+import com.example.ui.theme.NeonCyan
 import com.example.ui.theme.SuccessGreen
 import com.example.ui.theme.WarningOrange
 
@@ -27,6 +31,11 @@ import com.example.ui.theme.WarningOrange
 fun GpuScreen(repository: KernelRepository) {
     val gpuConfig by repository.gpuConfigFlow.collectAsState()
     var expandedGovDropdown by remember { mutableStateOf(false) }
+    val animatedGpuProgress by animateFloatAsState(
+        targetValue = (gpuConfig.curFreqMhz.toFloat() / 1100f).coerceIn(0f, 1f),
+        animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+        label = "gpu_clock_progress"
+    )
 
     LazyColumn(
         modifier = Modifier
@@ -34,7 +43,7 @@ fun GpuScreen(repository: KernelRepository) {
             .background(MaterialTheme.colorScheme.background),
         contentPadding = PaddingValues(16.dp, 16.dp, 16.dp, 90.dp)
     ) {
-        item {
+        item(key = "gpu_header") {
             // Header
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -44,21 +53,23 @@ fun GpuScreen(repository: KernelRepository) {
                 Column {
                     Text(
                         text = "GPU FREQUENCY & VOLTAGE SCALING",
-                        fontSize = 11.sp,
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 1.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = NeonCyan
                     )
                     Text(
                         text = "${gpuConfig.modelName} (250 - 1100 MHz)",
                         fontSize = 18.sp,
-                        fontWeight = FontWeight.ExtraBold,
+                        fontWeight = FontWeight.Black,
                         color = MaterialTheme.colorScheme.primary
                     )
                 }
                 Badge(containerColor = MaterialTheme.colorScheme.primaryContainer) {
                     Text(
                         text = "Load: ${gpuConfig.loadPercent}%",
+                        fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.primary
@@ -68,7 +79,7 @@ fun GpuScreen(repository: KernelRepository) {
             Spacer(modifier = Modifier.height(16.dp))
         }
 
-        item {
+        item(key = "gpu_clock_scaling_card") {
             // GPU Overview & Max 1100 MHz Clock Speed Card
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -131,7 +142,7 @@ fun GpuScreen(repository: KernelRepository) {
                     Spacer(modifier = Modifier.height(8.dp))
 
                     LinearProgressIndicator(
-                        progress = { (gpuConfig.curFreqMhz.toFloat() / 1100f).coerceIn(0f, 1f) },
+                        progress = { animatedGpuProgress },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(8.dp)
@@ -139,6 +150,7 @@ fun GpuScreen(repository: KernelRepository) {
                         color = MaterialTheme.colorScheme.primary,
                         trackColor = MaterialTheme.colorScheme.surfaceVariant
                     )
+
 
                     Spacer(modifier = Modifier.height(14.dp))
 

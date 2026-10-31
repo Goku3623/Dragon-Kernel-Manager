@@ -1,16 +1,15 @@
 package com.example.ui.screens
 
-import android.content.Context
-import android.content.Intent
-import android.net.Uri
-import android.os.Build
-import android.provider.Settings
-import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -24,6 +23,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -31,10 +31,13 @@ import androidx.compose.ui.unit.sp
 import com.example.data.model.BatteryProfile
 import com.example.data.repository.KernelRepository
 import com.example.service.DragonMonitorService
-import com.example.service.FloatingOverlayService
 import com.example.ui.components.ProfileSelectionDialog
 import com.example.ui.components.ThermalAlertBanner
+import com.example.ui.theme.AmberGold
 import com.example.ui.theme.DangerRed
+import com.example.ui.theme.ElectricViolet
+import com.example.ui.theme.LocalThemeCustomization
+import com.example.ui.theme.NeonCyan
 import com.example.ui.theme.SuccessGreen
 import com.example.ui.theme.WarningOrange
 import java.util.Locale
@@ -57,7 +60,9 @@ fun DashboardScreen(
     val thermalConfig by repository.thermalConfigFlow.collectAsState()
     val isRootGranted by repository.isRootGrantedFlow.collectAsState()
     val chargingControls by repository.chargingControlsFlow.collectAsState()
-    val fpsOverlayConfig by repository.fpsOverlayConfigFlow.collectAsState()
+    val currentFps by repository.currentFpsFlow.collectAsState()
+    val vramConfig by repository.vramConfigFlow.collectAsState()
+    val themeCustomization = LocalThemeCustomization.current
 
     var showProfileDialog by remember { mutableStateOf(false) }
 
@@ -66,6 +71,9 @@ fun DashboardScreen(
             currentProfile = activeProfile,
             customProfiles = customProfiles,
             activeCustomProfile = activeCustomProfile,
+            liveFps = currentFps,
+            liveCpuTemp = cpuTemp,
+            liveGpuMhz = gpuConfig.curFreqMhz,
             onSelectProfile = { repository.setBatteryProfile(it) },
             onSelectCustomProfile = { repository.setCustomBatteryProfile(it) },
             onDeleteCustomProfile = { repository.deleteCustomProfile(it) },
@@ -73,26 +81,31 @@ fun DashboardScreen(
         )
     }
 
+    val isGamingMode = activeCustomProfile == null && activeProfile == BatteryProfile.GAMING
+    val primaryColor = MaterialTheme.colorScheme.primary
+    val secondaryColor = MaterialTheme.colorScheme.secondary
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background),
         contentPadding = PaddingValues(bottom = 100.dp)
     ) {
-        item {
-            // Header Hero Banner
+        item(key = "hero_gaming_deck") {
+            // Gaming Command Deck Hero Banner
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(
                         Brush.verticalGradient(
                             listOf(
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.25f),
+                                primaryColor.copy(alpha = (themeCustomization.headerGlowIntensity + if (isGamingMode) 0.08f else 0f).coerceIn(0.05f, 0.55f)),
+                                secondaryColor.copy(alpha = (themeCustomization.headerGlowIntensity * 0.35f).coerceIn(0.02f, 0.25f)),
                                 Color.Transparent
                             )
                         )
                     )
-                    .padding(horizontal = 20.dp, vertical = 18.dp)
+                    .padding(horizontal = 16.dp, vertical = 14.dp)
             ) {
                 Column {
                     Row(
@@ -100,110 +113,226 @@ fun DashboardScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
-                                    text = "DRAGON KERNEL MANAGER",
-                                    fontSize = 20.sp,
-                                    fontWeight = FontWeight.Black,
-                                    letterSpacing = 1.sp,
-                                    color = MaterialTheme.colorScheme.primary
+                                    text = "COMMAND CENTER // SM8635",
+                                    fontSize = 10.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 1.2.sp,
+                                    color = secondaryColor
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Badge(
-                                    containerColor = if (isRootGranted) SuccessGreen.copy(alpha = 0.2f) else WarningOrange.copy(alpha = 0.2f),
-                                    contentColor = if (isRootGranted) SuccessGreen else WarningOrange
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(
+                                            if (isRootGranted) SuccessGreen.copy(alpha = 0.16f)
+                                            else WarningOrange.copy(alpha = 0.16f)
+                                        )
+                                        .border(
+                                            1.dp,
+                                            if (isRootGranted) SuccessGreen.copy(alpha = 0.45f)
+                                            else WarningOrange.copy(alpha = 0.45f),
+                                            RoundedCornerShape(6.dp)
+                                        )
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
                                 ) {
                                     Text(
-                                        text = if (isRootGranted) "ROOT ACTIVE" else "SAFE KERNEL",
+                                        text = if (isRootGranted) "ROOT UNLOCKED" else "SAFE KERNEL",
                                         fontSize = 9.sp,
-                                        fontWeight = FontWeight.Bold
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = if (isRootGranted) SuccessGreen else WarningOrange
                                     )
                                 }
                             }
+                            Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "Xiaomi POCO F6 • Snapdragon 8s Gen 3",
-                                fontSize = 12.sp,
+                                text = "DRAGON KERNEL HUD",
+                                fontSize = 21.sp,
+                                fontWeight = FontWeight.Black,
+                                letterSpacing = 0.8.sp,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Xiaomi POCO F6 • Snapdragon 8s Gen 3 • Adreno 735",
+                                fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
 
                         IconButton(
-                            onClick = { repository.checkRoot() },
+                            onClick = {
+                                repository.checkRoot()
+                                repository.grantRootAndRefreshBatteryHealth()
+                                repository.grantRootAndRefreshRamInfo()
+                            },
                             modifier = Modifier
-                                .clip(CircleShape)
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(12.dp))
                                 .background(MaterialTheme.colorScheme.surfaceVariant)
+                                .border(
+                                    1.dp,
+                                    primaryColor.copy(alpha = 0.35f),
+                                    RoundedCornerShape(12.dp)
+                                )
+                                .testTag("dashboard_refresh_button")
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Refresh,
-                                contentDescription = "Refresh",
-                                tint = MaterialTheme.colorScheme.primary
+                                contentDescription = "Sync Hardware Telemetry",
+                                tint = primaryColor,
+                                modifier = Modifier.size(20.dp)
                             )
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(14.dp))
 
-                    // Active Profile Card with Quick Switcher Trigger
+                    // Active Engine Profile Deck
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(18.dp))
-                            .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f), RoundedCornerShape(18.dp))
-                            .clickable { showProfileDialog = true },
+                            .border(
+                                width = 1.dp,
+                                brush = Brush.horizontalGradient(
+                                    listOf(
+                                        primaryColor.copy(alpha = 0.7f),
+                                        NeonCyan.copy(alpha = 0.4f),
+                                        primaryColor.copy(alpha = 0.7f)
+                                    )
+                                ),
+                                shape = RoundedCornerShape(18.dp)
+                            )
+                            .clickable { showProfileDialog = true }
+                            .testTag("active_profile_card"),
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                     ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(46.dp)
+                                        .clip(RoundedCornerShape(13.dp))
+                                        .background(
+                                            Brush.linearGradient(
+                                                listOf(
+                                                    primaryColor.copy(alpha = 0.28f),
+                                                    NeonCyan.copy(alpha = 0.14f)
+                                                )
+                                            )
+                                        )
+                                        .border(
+                                            1.dp,
+                                            primaryColor.copy(alpha = 0.5f),
+                                            RoundedCornerShape(13.dp)
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = if (isGamingMode) Icons.Default.SportsEsports else Icons.Default.Bolt,
+                                        contentDescription = "Active Mode",
+                                        tint = primaryColor,
+                                        modifier = Modifier.size(26.dp)
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.width(12.dp))
+
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = "ENGINE MODE",
+                                            fontSize = 9.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontWeight = FontWeight.Bold,
+                                            letterSpacing = 1.sp,
+                                            color = NeonCyan
+                                        )
+                                        if (isGamingMode) {
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                text = "• 1100 MHz TURBO",
+                                                fontSize = 9.sp,
+                                                fontFamily = FontFamily.Monospace,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = SuccessGreen
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        text = activeCustomProfile?.title ?: activeProfile.title,
+                                        fontSize = 17.sp,
+                                        fontWeight = FontWeight.Black,
+                                        color = primaryColor
+                                    )
+                                    Text(
+                                        text = activeCustomProfile?.description ?: activeProfile.description,
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1
+                                    )
+                                }
+
+                                FilledTonalButton(
+                                    onClick = { showProfileDialog = true },
+                                    shape = RoundedCornerShape(10.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                ) {
+                                    Text("Profiles", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            // 1-Tap Quick Gaming & Performance Mode Strip
+                            Row(
                                 modifier = Modifier
-                                    .size(48.dp)
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)),
-                                contentAlignment = Alignment.Center
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.Bolt,
-                                    contentDescription = "Profile",
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(28.dp)
+                                QuickModeChip(
+                                    label = "GAMING TURBO",
+                                    icon = Icons.Default.SportsEsports,
+                                    isSelected = activeCustomProfile == null && activeProfile == BatteryProfile.GAMING,
+                                    accentColor = primaryColor,
+                                    onClick = { repository.setBatteryProfile(BatteryProfile.GAMING) }
                                 )
-                            }
-
-                            Spacer(modifier = Modifier.width(14.dp))
-
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "ACTIVE PROFILE",
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    letterSpacing = 1.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                QuickModeChip(
+                                    label = "PEAK PERF",
+                                    icon = Icons.Default.Speed,
+                                    isSelected = activeCustomProfile == null && activeProfile == BatteryProfile.PERFORMANCE,
+                                    accentColor = AmberGold,
+                                    onClick = { repository.setBatteryProfile(BatteryProfile.PERFORMANCE) }
                                 )
-                                Text(
-                                    text = activeCustomProfile?.title ?: activeProfile.title,
-                                    fontSize = 17.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = MaterialTheme.colorScheme.primary
+                                QuickModeChip(
+                                    label = "BALANCED",
+                                    icon = Icons.Default.Balance,
+                                    isSelected = activeCustomProfile == null && activeProfile == BatteryProfile.BALANCED,
+                                    accentColor = NeonCyan,
+                                    onClick = { repository.setBatteryProfile(BatteryProfile.BALANCED) }
                                 )
-                                Text(
-                                    text = activeCustomProfile?.description ?: activeProfile.description,
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1
+                                QuickModeChip(
+                                    label = "AUTO SMART",
+                                    icon = Icons.Default.AutoAwesome,
+                                    isSelected = activeCustomProfile == null && activeProfile == BatteryProfile.AUTO,
+                                    accentColor = ElectricViolet,
+                                    onClick = { repository.setBatteryProfile(BatteryProfile.AUTO) }
                                 )
-                            }
-
-                            FilledTonalButton(
-                                onClick = { showProfileDialog = true },
-                                shape = RoundedCornerShape(10.dp),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-                            ) {
-                                Text("Switch", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                QuickModeChip(
+                                    label = "SAVER",
+                                    icon = Icons.Default.Eco,
+                                    isSelected = activeCustomProfile == null && activeProfile == BatteryProfile.POWER_SAVING,
+                                    accentColor = SuccessGreen,
+                                    onClick = { repository.setBatteryProfile(BatteryProfile.POWER_SAVING) }
+                                )
                             }
                         }
                     }
@@ -211,7 +340,7 @@ fun DashboardScreen(
             }
         }
 
-        item {
+        item(key = "thermal_alert_banner") {
             // Thermal Warning Banner
             ThermalAlertBanner(
                 batTemp = battery.temperatureC,
@@ -221,63 +350,115 @@ fun DashboardScreen(
             )
         }
 
-        item {
-            // Live Telemetry Matrix (4 Quick Gauges)
-            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
-                Text(
-                    text = "HARDWARE TELEMETRY OVERVIEW",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
+        item(key = "telemetry_matrix") {
+            // Live 6-Tile Gaming Telemetry Matrix
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "REAL-TIME HARDWARE TELEMETRY",
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "120Hz LIVE POLLING",
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        color = SuccessGreen
+                    )
+                }
 
+                // Row 1: Whole-Screen FPS + CPU Temp/Load
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
+                    val frameTimeMs = 1000f / currentFps.coerceAtLeast(1).toFloat()
                     TelemetryMiniCard(
-                        title = "CPU TEMP",
-                        value = String.format(Locale.US, "%.1f°C", cpuTemp),
-                        subtitle = "Load: $cpuLoad%",
-                        icon = Icons.Default.Thermostat,
-                        accentColor = if (cpuTemp > 65f) DangerRed else MaterialTheme.colorScheme.primary,
+                        title = "LIVE SCREEN FPS",
+                        value = "$currentFps FPS",
+                        subtitle = String.format(Locale.US, "%.2f ms • SurfaceFlinger", frameTimeMs),
+                        icon = Icons.Default.Speed,
+                        accentColor = if (currentFps >= 90) SuccessGreen else NeonCyan,
+                        progress = (currentFps / 120f).coerceIn(0f, 1f),
                         modifier = Modifier.weight(1f),
-                        onClick = { onNavigateToTab(1) }
+                        onClick = { onNavigateToTab(4) }
                     )
                     TelemetryMiniCard(
-                        title = "BAT TEMP",
-                        value = String.format(Locale.US, "%.1f°C", battery.temperatureC),
-                        subtitle = "${battery.voltageMv} mV",
-                        icon = Icons.Default.BatteryChargingFull,
-                        accentColor = if (battery.temperatureC > 42f) WarningOrange else SuccessGreen,
+                        title = "CPU THERMALS",
+                        value = String.format(Locale.US, "%.1f°C", cpuTemp),
+                        subtitle = "Load: $cpuLoad% • 8 Cores",
+                        icon = Icons.Default.Thermostat,
+                        accentColor = if (cpuTemp > 65f) DangerRed else primaryColor,
+                        progress = (cpuLoad / 100f).coerceIn(0f, 1f),
                         modifier = Modifier.weight(1f),
-                        onClick = { onNavigateToTab(3) }
+                        onClick = { onNavigateToTab(1) }
                     )
                 }
 
                 Spacer(modifier = Modifier.height(10.dp))
 
+                // Row 2: GPU Clock + LPDDR5X RAM / VRAM
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     TelemetryMiniCard(
-                        title = "GPU CLOCK",
+                        title = "ADRENO 735 GPU",
                         value = "${gpuConfig.curFreqMhz} MHz",
-                        subtitle = "Max: ${gpuConfig.maxFreqMhz} MHz",
+                        subtitle = "Load: ${gpuConfig.loadPercent}% • Max ${gpuConfig.maxFreqMhz}",
                         icon = Icons.Default.SportsEsports,
-                        accentColor = MaterialTheme.colorScheme.primary,
+                        accentColor = NeonCyan,
+                        progress = (gpuConfig.curFreqMhz.toFloat() / gpuConfig.maxFreqMhz.coerceAtLeast(1).toFloat()).coerceIn(0f, 1f),
                         modifier = Modifier.weight(1f),
                         onClick = { onNavigateToTab(2) }
+                    )
+                    val ramRatio = vramConfig.usedRamMb.toFloat() / vramConfig.totalRamMb.coerceAtLeast(1).toFloat()
+                    TelemetryMiniCard(
+                        title = "LPDDR5X & VRAM",
+                        value = "${vramConfig.usedRamMb} MB",
+                        subtitle = "/ ${vramConfig.totalRamMb} MB • GPU ${vramConfig.gpuVramAllocatedMb}M",
+                        icon = Icons.Default.Dns,
+                        accentColor = ElectricViolet,
+                        progress = ramRatio.coerceIn(0f, 1f),
+                        modifier = Modifier.weight(1f),
+                        onClick = { onNavigateToTab(4) }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Row 3: Battery Temp/SOH + Live Power Flow
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    TelemetryMiniCard(
+                        title = "BATTERY & SOH",
+                        value = "${battery.levelPercent}% • ${String.format(Locale.US, "%.1f°C", battery.temperatureC)}",
+                        subtitle = "SOH ${battery.healthPercent}% • ${battery.chargeCycles} Cycles",
+                        icon = Icons.Default.BatteryChargingFull,
+                        accentColor = if (battery.temperatureC > 42f) WarningOrange else SuccessGreen,
+                        progress = (battery.levelPercent / 100f).coerceIn(0f, 1f),
+                        modifier = Modifier.weight(1f),
+                        onClick = { onNavigateToTab(3) }
                     )
                     TelemetryMiniCard(
                         title = if (battery.isCharging) "LIVE CHARGE SPEED" else "DISCHARGE RATE",
                         value = if (battery.isCharging) String.format(Locale.US, "+%.2f W", battery.chargeSpeedWatts) else "${battery.dischargeRateMa} mA",
-                        subtitle = if (battery.isCharging) "+${battery.currentMa} mA • ${String.format(Locale.US, "%.2f V", battery.voltageMv / 1000f)}" else String.format(Locale.US, "%.1f%%/hr", battery.dischargeRatePercentPerHour),
+                        subtitle = if (battery.isCharging) "+${battery.currentMa} mA • ${String.format(Locale.US, "%.2f V", battery.voltageMv / 1000f)}" else String.format(Locale.US, "%.1f%%/hr • %d mV", battery.dischargeRatePercentPerHour, battery.voltageMv),
                         icon = if (battery.isCharging) Icons.Default.FlashOn else Icons.Default.South,
-                        accentColor = if (battery.isCharging) SuccessGreen else MaterialTheme.colorScheme.onSurface,
+                        accentColor = if (battery.isCharging) SuccessGreen else AmberGold,
+                        progress = if (battery.isCharging) (battery.chargeSpeedWatts / 90f).coerceIn(0.08f, 1f) else (battery.dischargeRateMa / 2500f).coerceIn(0.08f, 1f),
                         modifier = Modifier.weight(1f),
                         onClick = { onNavigateToTab(3) }
                     )
@@ -285,7 +466,7 @@ fun DashboardScreen(
             }
         }
 
-        item {
+        item(key = "cpu_clusters_card") {
             // CPU Clusters Status Card
             Card(
                 modifier = Modifier
@@ -302,45 +483,79 @@ fun DashboardScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Memory, contentDescription = "CPU", tint = MaterialTheme.colorScheme.primary)
+                            Icon(Icons.Default.Memory, contentDescription = "CPU", tint = primaryColor)
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("CPU Octa-Core Cluster Telemetry", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            Column {
+                                Text("OCTA-CORE CLUSTER TELEMETRY", fontWeight = FontWeight.ExtraBold, fontSize = 13.sp)
+                                Text(
+                                    "3x Cortex-A520 • 4x Cortex-A720 • 1x Cortex-X4",
+                                    fontSize = 10.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
-                        TextButton(onClick = { onNavigateToTab(1) }) {
-                            Text("Tune CPU", fontSize = 11.sp)
+                        FilledTonalButton(
+                            onClick = { onNavigateToTab(1) },
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                        ) {
+                            Text("Tune CPU", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
 
                     cpuClusters.forEach { cluster ->
-                        Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                        val targetProgress = (cluster.curFreqKhz.toFloat() / cluster.maxFreqKhz.coerceAtLeast(1).toFloat()).coerceIn(0f, 1f)
+                        val animatedProgress by animateFloatAsState(
+                            targetValue = targetProgress,
+                            animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+                            label = "cluster_freq_${cluster.id}"
+                        )
+                        val clusterColor = when (cluster.id) {
+                            0 -> NeonCyan
+                            1 -> AmberGold
+                            else -> primaryColor
+                        }
+
+                        Column(modifier = Modifier.padding(vertical = 5.dp)) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = cluster.name,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = cluster.governor.uppercase(Locale.US),
+                                        fontSize = 9.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.Bold,
+                                        color = clusterColor
+                                    )
+                                }
                                 Text(
-                                    text = "${cluster.name} (${cluster.archName})",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = "${cluster.curFreqKhz / 1000} MHz / ${cluster.maxFreqKhz / 1000} MHz",
+                                    text = "${cluster.curFreqKhz / 1000} / ${cluster.maxFreqKhz / 1000} MHz",
                                     fontSize = 12.sp,
                                     fontFamily = FontFamily.Monospace,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.primary
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = clusterColor
                                 )
                             }
-                            val progress = cluster.curFreqKhz.toFloat() / cluster.maxFreqKhz.toFloat()
+                            Spacer(modifier = Modifier.height(4.dp))
                             LinearProgressIndicator(
-                                progress = { progress.coerceIn(0f, 1f) },
+                                progress = { animatedProgress },
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .height(6.dp)
                                     .clip(RoundedCornerShape(3.dp)),
-                                color = MaterialTheme.colorScheme.primary,
+                                color = clusterColor,
                                 trackColor = MaterialTheme.colorScheme.surfaceVariant
                             )
                         }
@@ -349,7 +564,7 @@ fun DashboardScreen(
             }
         }
 
-        item {
+        item(key = "battery_health_card") {
             // Battery & Drain Health Card
             Card(
                 modifier = Modifier
@@ -368,14 +583,26 @@ fun DashboardScreen(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Default.BatteryStd, contentDescription = "Battery", tint = SuccessGreen)
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Power Drain & Capacity Health", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            Column {
+                                Text("POWER DRAIN & CELL HEALTH", fontWeight = FontWeight.ExtraBold, fontSize = 13.sp)
+                                Text(
+                                    text = battery.healthAndCycleSource,
+                                    fontSize = 10.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
-                        TextButton(onClick = { onNavigateToTab(3) }) {
-                            Text("Details", fontSize = 11.sp)
+                        FilledTonalButton(
+                            onClick = { onNavigateToTab(3) },
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                        ) {
+                            Text("90W Control", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -383,38 +610,135 @@ fun DashboardScreen(
                     ) {
                         DrainStatItem("Health (SOH)", "${battery.healthPercent}% (${battery.healthStatusText})", SuccessGreen)
                         DrainStatItem("Full / Design", "${battery.learnedFullCapacityMah} / ${battery.designCapacityMah}", MaterialTheme.colorScheme.onSurface)
-                        DrainStatItem("Cycles", "${battery.chargeCycles}", MaterialTheme.colorScheme.onSurface)
-                        DrainStatItem("Deep Sleep", String.format(Locale.US, "%.0f%%", battery.deepSleepPercent), MaterialTheme.colorScheme.primary)
+                        DrainStatItem("Cycles", "${battery.chargeCycles}", NeonCyan)
+                        DrainStatItem("Deep Sleep", String.format(Locale.US, "%.0f%%", battery.deepSleepPercent), primaryColor)
                     }
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
                     HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                    // Borderless, Simple Live Notification Telemetry Readout (Matches System Notification Shade)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
+                            .padding(horizontal = 14.dp, vertical = 12.dp)
+                            .testTag("notification_hud_live_card")
                     ) {
-                        Text(
-                            text = "Active Drain: ${battery.activeDrainPerHour}%/h  •  Idle Drain: ${battery.idleDrainPerHour}%/h",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        if (chargingControls.bypassCharging) {
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            // Line 1: 100% • 615 mA (2.7 W) • 35°C
                             Text(
-                                text = "BYPASS CHARGING ON",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
+                                text = String.format(
+                                    Locale.US,
+                                    "%d%% • %d mA (%.1f W) • %.0f°C",
+                                    battery.levelPercent,
+                                    kotlin.math.abs(battery.currentMa),
+                                    battery.livePowerWatts,
+                                    battery.temperatureC
+                                ),
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSurface
                             )
+                            // Line 2: Active: 0.0%/h • Idle: 0.0%/h
+                            Text(
+                                text = String.format(
+                                    Locale.US,
+                                    "Active: %.1f%%/h • Idle: %.1f%%/h",
+                                    battery.activeDrainPerHour,
+                                    battery.idleDrainPerHour
+                                ),
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f)
+                            )
+                            // Line 3: Screen On: 54s • 0.0% (7 mAh)
+                            Text(
+                                text = String.format(
+                                    Locale.US,
+                                    "Screen On: %s • %.1f%% (%d mAh)",
+                                    battery.screenOnTimeFormatted,
+                                    battery.screenOnDrainPercent,
+                                    battery.screenOnDrainMah
+                                ),
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f)
+                            )
+                            // Line 4: Screen Off: 0s • 0.0% (0 mAh)
+                            Text(
+                                text = String.format(
+                                    Locale.US,
+                                    "Screen Off: %s • %.1f%% (%d mAh)",
+                                    battery.screenOffTimeFormatted,
+                                    battery.screenOffDrainPercent,
+                                    battery.screenOffDrainMah
+                                ),
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f)
+                            )
+                            // Line 5: Deep sleep: 0s • 0.0%
+                            Text(
+                                text = String.format(
+                                    Locale.US,
+                                    "Deep sleep: %s • %.1f%%",
+                                    battery.deepSleepTimeFormatted,
+                                    battery.deepSleepPercent
+                                ),
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
+                            )
+                            // Line 6: Awake: 0s • 100.0%
+                            Text(
+                                text = String.format(
+                                    Locale.US,
+                                    "Awake: %s • %.1f%%",
+                                    battery.awakeTimeFormatted,
+                                    battery.awakePercent
+                                ),
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
+                            )
+
+                            Spacer(modifier = Modifier.height(6.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                TextButton(
+                                    onClick = { showProfileDialog = true },
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                    modifier = Modifier.testTag("notif_preview_change_profile_btn")
+                                ) {
+                                    Text(
+                                        text = "Change Battery Profile",
+                                        fontSize = 12.5.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = primaryColor
+                                    )
+                                }
+
+                                TextButton(
+                                    onClick = { repository.resetBatterySessionStats() },
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = "Reset",
+                                        fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
                         }
                     }
                 }
             }
         }
 
-        item {
-            // Quick Utilities Card (Floating Hardware HUD Overlay removed from Dashboard)
+        item(key = "quick_gaming_utilities") {
+            // Quick Gaming Boosters & Background Telemetry Card
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -425,38 +749,95 @@ fun DashboardScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "QUICK UTILITIES & BACKGROUND TELEMETRY",
+                        text = "GAMING BOOSTERS & TELEMETRY DAEMON",
                         fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 1.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = NeonCyan
                     )
 
                     Spacer(modifier = Modifier.height(12.dp))
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Persistent Status Bar Telemetry", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                            Text(
-                                "Monitors live charging speed, temps, drain rate, & profile pop-up",
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                        OutlinedButton(
+                            onClick = { repository.purgeVramAndCaches() },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CleaningServices,
+                                contentDescription = "Purge RAM",
+                                tint = NeonCyan,
+                                modifier = Modifier.size(16.dp)
                             )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Purge RAM Cache", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
+
                         Button(
                             onClick = { DragonMonitorService.startService(context) },
-                            shape = RoundedCornerShape(10.dp),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp)
                         ) {
-                            Text("Restart Service", fontSize = 11.sp)
+                            Icon(
+                                imageVector = Icons.Default.NotificationsActive,
+                                contentDescription = "Restart Telemetry",
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Sync HUD Service", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun QuickModeChip(
+    label: String,
+    icon: ImageVector,
+    isSelected: Boolean,
+    accentColor: Color,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(
+                if (isSelected) accentColor.copy(alpha = 0.22f)
+                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
+            )
+            .border(
+                width = 1.dp,
+                color = if (isSelected) accentColor else MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+                shape = RoundedCornerShape(10.dp)
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 7.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = icon,
+                contentDescription = label,
+                tint = if (isSelected) accentColor else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(14.dp)
+            )
+            Spacer(modifier = Modifier.width(5.dp))
+            Text(
+                text = label,
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.SemiBold,
+                color = if (isSelected) accentColor else MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
@@ -469,16 +850,22 @@ fun TelemetryMiniCard(
     icon: ImageVector,
     accentColor: Color,
     modifier: Modifier = Modifier,
+    progress: Float? = null,
     onClick: () -> Unit
 ) {
+    val themeCustomization = LocalThemeCustomization.current
+    val cardShape = RoundedCornerShape(themeCustomization.cornerRadiusDp.dp)
+    val glowAlpha = (themeCustomization.borderGlowIntensity * 0.6f).coerceIn(0.18f, 0.75f)
+
     Card(
         modifier = modifier
-            .clip(RoundedCornerShape(16.dp))
-            .border(1.dp, accentColor.copy(alpha = 0.35f), RoundedCornerShape(16.dp))
+            .clip(cardShape)
+            .border(1.dp, accentColor.copy(alpha = glowAlpha), cardShape)
             .clickable(onClick = onClick),
+        shape = cardShape,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
-        Column(modifier = Modifier.padding(14.dp)) {
+        Column(modifier = Modifier.padding(13.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -486,34 +873,63 @@ fun TelemetryMiniCard(
             ) {
                 Text(
                     text = title,
-                    fontSize = 10.sp,
+                    fontSize = 9.sp,
+                    fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.8.sp,
+                    letterSpacing = 0.7.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Icon(
-                    imageVector = icon,
-                    contentDescription = title,
-                    tint = accentColor,
-                    modifier = Modifier.size(18.dp)
-                )
+                Box(
+                    modifier = Modifier
+                        .size(24.dp)
+                        .clip(RoundedCornerShape(7.dp))
+                        .background(accentColor.copy(alpha = 0.14f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = title,
+                        tint = accentColor,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
             Text(
                 text = value,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.ExtraBold,
+                fontSize = 17.sp,
+                fontWeight = FontWeight.Black,
                 fontFamily = FontFamily.Monospace,
-                color = accentColor
+                color = accentColor,
+                maxLines = 1
             )
 
             Text(
                 text = subtitle,
-                fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                fontSize = 10.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1
             )
+
+            if (progress != null) {
+                val animatedBar by animateFloatAsState(
+                    targetValue = progress.coerceIn(0f, 1f),
+                    animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+                    label = "telemetry_bar_$title"
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                LinearProgressIndicator(
+                    progress = { animatedBar },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(2.dp)),
+                    color = accentColor,
+                    trackColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+            }
         }
     }
 }
@@ -531,3 +947,4 @@ fun DrainStatItem(label: String, value: String, valueColor: Color) {
         )
     }
 }
+

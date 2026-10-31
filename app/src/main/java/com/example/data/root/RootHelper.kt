@@ -74,30 +74,17 @@ object RootHelper {
     suspend fun grantRootFpsPermissions(packageName: String, nativePeakHz: Int = 120): Boolean = withContext(Dispatchers.IO) {
         val granted = refreshRootStatus()
         if (!granted) return@withContext false
-        val targetHz = if (nativePeakHz > 60) nativePeakHz else 120
         val grantCmd = """
-            pm grant $packageName android.permission.DUMP 2>/dev/null || true
             pm grant $packageName android.permission.PACKAGE_USAGE_STATS 2>/dev/null || true
             pm grant $packageName android.permission.BATTERY_STATS 2>/dev/null || true
-            pm grant $packageName android.permission.WRITE_SECURE_SETTINGS 2>/dev/null || true
             appops set $packageName GET_USAGE_STATS allow 2>/dev/null || true
             appops set $packageName SYSTEM_ALERT_WINDOW allow 2>/dev/null || true
-            appops set $packageName WRITE_SETTINGS allow 2>/dev/null || true
             chmod 0644 /sys/class/drm/sde-crtc-0/measured_fps 2>/dev/null || true
             chmod 0644 /sys/class/drm/card0/sde-crtc-0/measured_fps 2>/dev/null || true
             chmod 0644 /sys/class/graphics/fb0/measured_fps 2>/dev/null || true
             chmod 0666 /sys/class/kgsl/kgsl-3d0/throttling 2>/dev/null || true
             chmod 0666 /sys/class/kgsl/kgsl-3d0/devfreq/adrenoboost 2>/dev/null || true
-            chmod 0666 /sys/class/kgsl/kgsl-3d0/force_bus_on 2>/dev/null || true
-            chmod 0666 /sys/class/kgsl/kgsl-3d0/force_clk_on 2>/dev/null || true
-            # Clear any SurfaceFlinger 60Hz display mode lock (1035 = setDesiredDisplayModeSpecs / setActiveConfig)
-            service call SurfaceFlinger 1035 i32 -1 2>/dev/null || true
-            # Restore whole-device high refresh rate if any setting was capped to 60Hz
-            settings put system peak_refresh_rate ${targetHz}.0 2>/dev/null || true
-            settings put secure user_refresh_rate $targetHz 2>/dev/null || true
-            settings put secure miui_refresh_rate $targetHz 2>/dev/null || true
-            settings delete system min_refresh_rate 2>/dev/null || true
-            # Ensure DragonAccessibilityMonitorService is not active in enabled_accessibility_services (which causes Android DisplayModeDirector to cap device refresh rate to 60Hz)
+            # Clean up any legacy DragonAccessibilityMonitorService entry that could cause Android DisplayModeDirector to cap refresh rate
             cur_acc=$(settings get secure enabled_accessibility_services 2>/dev/null)
             if echo "${'$'}cur_acc" | grep -q "DragonAccessibilityMonitorService"; then
                 settings delete secure enabled_accessibility_services 2>/dev/null || true

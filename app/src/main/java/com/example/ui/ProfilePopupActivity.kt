@@ -1,5 +1,6 @@
 package com.example.ui
 
+import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -22,6 +23,7 @@ class ProfilePopupActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        ensureHighRefreshRatePopupWindow()
 
         setContent {
             val accentIndex by repository.accentColorIndexFlow.collectAsState()
@@ -29,16 +31,21 @@ class ProfilePopupActivity : ComponentActivity() {
             val activeProfile by repository.activeProfileFlow.collectAsState()
             val customProfiles by repository.customProfilesFlow.collectAsState()
             val activeCustomProfile by repository.activeCustomProfileFlow.collectAsState()
+            val liveFps by repository.currentFpsFlow.collectAsState()
+            val liveCpuTemp by repository.cpuTempFlow.collectAsState()
+            val gpuConfig by repository.gpuConfigFlow.collectAsState()
+            val themeConfig by repository.themeConfigFlow.collectAsState()
 
             DragonKernelTheme(
                 accentIndex = accentIndex,
-                isAmoledBlack = isAmoledBlack
+                isAmoledBlack = isAmoledBlack,
+                themeConfig = themeConfig
             ) {
-                // Dim translucent scrim background that closes on click
+                // Lightweight translucent scrim background that closes on outside click
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.55f))
+                        .background(Color.Black.copy(alpha = 0.45f))
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null
@@ -51,14 +58,17 @@ class ProfilePopupActivity : ComponentActivity() {
                         currentProfile = activeProfile,
                         customProfiles = customProfiles,
                         activeCustomProfile = activeCustomProfile,
+                        liveFps = liveFps,
+                        liveCpuTemp = liveCpuTemp,
+                        liveGpuMhz = gpuConfig.curFreqMhz,
                         onSelectProfile = { profile ->
                             repository.setBatteryProfile(profile)
-                            Toast.makeText(this@ProfilePopupActivity, "Profile: ${profile.title}", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(this@ProfilePopupActivity, "HUD Mode: ${profile.title}", Toast.LENGTH_SHORT).show()
                             finish()
                         },
                         onSelectCustomProfile = { cProfile ->
                             repository.setCustomBatteryProfile(cProfile)
-                            Toast.makeText(this@ProfilePopupActivity, "Profile: ${cProfile.title}", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(this@ProfilePopupActivity, "HUD Mode: ${cProfile.title}", Toast.LENGTH_SHORT).show()
                             finish()
                         },
                         onDeleteCustomProfile = { id ->
@@ -72,4 +82,9 @@ class ProfilePopupActivity : ComponentActivity() {
             }
         }
     }
+
+    private fun ensureHighRefreshRatePopupWindow() {
+        // Do not set preferredDisplayModeId or preferredRefreshRate so the popup never alters system FPS.
+    }
 }
+

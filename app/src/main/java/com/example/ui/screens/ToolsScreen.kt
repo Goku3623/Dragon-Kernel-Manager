@@ -55,8 +55,8 @@ fun ToolsScreen(repository: KernelRepository) {
     val clipboardManager = LocalClipboardManager.current
 
     var selectedToolSection by remember { mutableStateOf(0) }
-    // 0: FPS, 1: App Freezer, 2: VRAM, 3: DexOpt, 4: Scripts, 5: Logs & Sync
-    val toolTabs = listOf("FPS", "App Freezer", "VRAM", "DexOpt", "Scripts", "Logs & Sync")
+    // 0: FPS, 1: App Freezer, 2: VRAM, 3: DexOpt, 4: Scripts, 5: Logs & Sync, 6: Theme & Color
+    val toolTabs = listOf("FPS", "App Freezer", "VRAM", "DexOpt", "Scripts", "Logs & Sync", "Theme & Color")
 
     val currentFps by repository.currentFpsFlow.collectAsState()
     val fpsHistory by repository.fpsHistoryFlow.collectAsState()
@@ -67,8 +67,7 @@ fun ToolsScreen(repository: KernelRepository) {
     val dexOptConfig by repository.dexOptConfigFlow.collectAsState()
     val apps by repository.appsFlow.collectAsState()
     val thermalConfig by repository.thermalConfigFlow.collectAsState()
-    val accentIndex by repository.accentColorIndexFlow.collectAsState()
-    val isAmoledBlack by repository.isAmoledBlackFlow.collectAsState()
+    val themeConfig by repository.themeConfigFlow.collectAsState()
     val isLoggingEnabled by repository.isLoggingEnabledFlow.collectAsState()
 
     val db = remember { DragonDatabase.getInstance(context) }
@@ -437,80 +436,7 @@ fun ToolsScreen(repository: KernelRepository) {
             }
 
             5 -> {
-                // LOG HISTORY, POWER HEALTH TRACKING, CLOUD SYNC & THEME CUSTOMIZATION
-                item {
-                    // Theme Customizer & Dark Mode Card
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(18.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                        border = CardDefaults.outlinedCardBorder()
-                    ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Palette, contentDescription = "Theme", tint = MaterialTheme.colorScheme.primary)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Interface Theme & Accent Color", fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                            }
-
-                            Text(
-                                text = "Select your preferred gaming accent color and AMOLED pure black dark mode.",
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(vertical = 4.dp)
-                            )
-
-                            Spacer(modifier = Modifier.height(10.dp))
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceEvenly
-                            ) {
-                                ACCENT_COLORS.forEachIndexed { index, pair ->
-                                    val isSelected = (accentIndex == index)
-                                    Box(
-                                        modifier = Modifier
-                                            .size(42.dp)
-                                            .clip(CircleShape)
-                                            .background(pair.second)
-                                            .border(
-                                                width = if (isSelected) 3.dp else 1.dp,
-                                                color = if (isSelected) Color.White else Color.Transparent,
-                                                shape = CircleShape
-                                            )
-                                            .clickable { repository.setAccentColorIndex(index) },
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        if (isSelected) {
-                                            Icon(Icons.Default.Check, contentDescription = null, tint = Color.Black, modifier = Modifier.size(20.dp))
-                                        }
-                                    }
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(14.dp))
-                            HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
-                            Spacer(modifier = Modifier.height(10.dp))
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text("AMOLED Pure Black (#000000)", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                    Text("Powers off pixels on 1.5K AMOLED panel to maximize battery life", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                                Switch(
-                                    checked = isAmoledBlack,
-                                    onCheckedChange = { repository.toggleAmoledBlack(it) }
-                                )
-                            }
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(16.dp))
-                }
-
+                // LOG HISTORY, POWER HEALTH TRACKING & CLOUD SYNC
                 item {
                     // Thermal Warning Notification System Config
                     Card(
@@ -790,6 +716,16 @@ fun ToolsScreen(repository: KernelRepository) {
                             }
                         }
                     }
+                }
+            }
+
+            6 -> {
+                // INTERFACE THEME & ACCENT COLOR STUDIO (SEPARATE SECTION AFTER LOGS & SYNC)
+                item {
+                    ThemeStudioSection(
+                        themeConfig = themeConfig,
+                        repository = repository
+                    )
                 }
             }
         }

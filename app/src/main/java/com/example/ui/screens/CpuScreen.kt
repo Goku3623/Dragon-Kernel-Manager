@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -20,7 +23,9 @@ import androidx.compose.ui.unit.sp
 import com.example.data.model.AdrenoCpuBoostConfig
 import com.example.data.model.CpuCluster
 import com.example.data.repository.KernelRepository
+import com.example.ui.theme.AmberGold
 import com.example.ui.theme.DangerRed
+import com.example.ui.theme.NeonCyan
 import com.example.ui.theme.SuccessGreen
 import com.example.ui.theme.WarningOrange
 
@@ -39,7 +44,7 @@ fun CpuScreen(repository: KernelRepository) {
             .background(MaterialTheme.colorScheme.background),
         contentPadding = PaddingValues(16.dp, 16.dp, 16.dp, 90.dp)
     ) {
-        item {
+        item(key = "cpu_header") {
             // Screen Header
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -49,21 +54,23 @@ fun CpuScreen(repository: KernelRepository) {
                 Column {
                     Text(
                         text = "CPU FREQUENCY & CLUSTER TUNER",
-                        fontSize = 11.sp,
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 1.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = NeonCyan
                     )
                     Text(
                         text = "Snapdragon 8s Gen 3 (SM8635)",
                         fontSize = 18.sp,
-                        fontWeight = FontWeight.ExtraBold,
+                        fontWeight = FontWeight.Black,
                         color = MaterialTheme.colorScheme.primary
                     )
                 }
                 Badge(containerColor = MaterialTheme.colorScheme.primaryContainer) {
                     Text(
                         text = "Avg Load: $cpuLoad%",
+                        fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.primary
@@ -73,7 +80,7 @@ fun CpuScreen(repository: KernelRepository) {
             Spacer(modifier = Modifier.height(16.dp))
         }
 
-        item {
+        item(key = "cpu_cores_grid") {
             // Core-Specific Management Tools Section
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -95,6 +102,7 @@ fun CpuScreen(repository: KernelRepository) {
                         Text(
                             text = "8 Cores Total",
                             fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
@@ -121,12 +129,22 @@ fun CpuScreen(repository: KernelRepository) {
                                         1 -> "Gold (A720)"
                                         else -> "Prime (X4)"
                                     }
+                                    val coreAccent = when (core.clusterId) {
+                                        0 -> NeonCyan
+                                        1 -> AmberGold
+                                        else -> MaterialTheme.colorScheme.primary
+                                    }
+                                    val animatedLoad by animateFloatAsState(
+                                        targetValue = (core.loadPercent / 100f).coerceIn(0f, 1f),
+                                        animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+                                        label = "core_load_${core.id}"
+                                    )
                                     Card(
                                         modifier = Modifier
                                             .weight(1f)
                                             .border(
                                                 1.dp,
-                                                if (core.isOnline) MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
+                                                if (core.isOnline) coreAccent.copy(alpha = 0.35f)
                                                 else MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
                                                 RoundedCornerShape(12.dp)
                                             ),
@@ -151,7 +169,8 @@ fun CpuScreen(repository: KernelRepository) {
                                                     Text(
                                                         text = clusterType,
                                                         fontSize = 9.sp,
-                                                        color = MaterialTheme.colorScheme.primary
+                                                        fontFamily = FontFamily.Monospace,
+                                                        color = coreAccent
                                                     )
                                                 }
                                                 Switch(
@@ -175,7 +194,7 @@ fun CpuScreen(repository: KernelRepository) {
                                                         fontSize = 11.sp,
                                                         fontFamily = FontFamily.Monospace,
                                                         fontWeight = FontWeight.Bold,
-                                                        color = MaterialTheme.colorScheme.primary
+                                                        color = coreAccent
                                                     )
                                                     Text(
                                                         text = "${core.loadPercent}%",
@@ -185,12 +204,12 @@ fun CpuScreen(repository: KernelRepository) {
                                                     )
                                                 }
                                                 LinearProgressIndicator(
-                                                    progress = { (core.loadPercent / 100f).coerceIn(0f, 1f) },
+                                                    progress = { animatedLoad },
                                                     modifier = Modifier
                                                         .fillMaxWidth()
                                                         .height(4.dp)
                                                         .clip(RoundedCornerShape(2.dp)),
-                                                    color = MaterialTheme.colorScheme.primary,
+                                                    color = coreAccent,
                                                     trackColor = MaterialTheme.colorScheme.surface
                                                 )
                                             } else {
@@ -211,6 +230,7 @@ fun CpuScreen(repository: KernelRepository) {
             }
             Spacer(modifier = Modifier.height(16.dp))
         }
+
 
         item {
             // Adreno CPU Boost Section

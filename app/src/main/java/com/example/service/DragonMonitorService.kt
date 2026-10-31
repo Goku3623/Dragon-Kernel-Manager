@@ -6,8 +6,8 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.os.BatteryManager
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import com.example.DragonKernelApp
 import com.example.MainActivity
@@ -23,12 +23,14 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.Locale
+import kotlin.math.abs
 
 class DragonMonitorService : Service() {
 
-    private val serviceScope = CoroutineScope(Dispatchers.Main + Job())
+    private val serviceScope = CoroutineScope(Dispatchers.Default + Job())
     private var monitorJob: Job? = null
     private var lastLogTime = 0L
+    private var lastNotificationSignature: String = ""
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -37,6 +39,19 @@ class DragonMonitorService : Service() {
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return START_NOT_STICKY
+        }
+
+        val repository = KernelRepository.getInstance(applicationContext)
+        when (intent?.action) {
+            ACTION_QUICK_GAMING -> {
+                repository.setBatteryProfile(BatteryProfile.GAMING)
+            }
+            ACTION_QUICK_BALANCED -> {
+                repository.setBatteryProfile(BatteryProfile.BALANCED)
+            }
+            ACTION_CYCLE_PROFILE -> {
+                repository.cycleNextBatteryProfile()
+            }
         }
 
         startForeground(NOTIFICATION_ID, buildTelemetryNotification())
@@ -49,6 +64,9 @@ class DragonMonitorService : Service() {
         monitorJob?.cancel()
         monitorJob = serviceScope.launch {
             val repository = KernelRepository.getInstance(applicationContext)
+            val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
+            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
             while (isActive) {
                 repository.tickTelemetry()
 
@@ -56,10 +74,17 @@ class DragonMonitorService : Service() {
                 val profile = repository.activeProfileFlow.value
                 val thermal = repository.thermalConfigFlow.value
 
-                // Update persistent notification
-                val notification = buildTelemetryNotification()
-                val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                notificationManager.notify(NOTIFICATION_ID, notification)
+                // Only post notification updates when screen is on and content actually changed to avoid SystemUI lag
+                val isInteractive = powerManager?.isInteractive ?: true
+                if (isInteractive) {
+                    val customProfile = repository.activeCustomProfileFlow.value
+                    val modeTag = customProfile?.title ?: profile.title
+                    val sig = "${battery.levelPercent}_${abs(battery.currentMa)}_${battery.temperatureC.toInt()}_${battery.screenOnTimeFormatted}_${battery.screenOffTimeFormatted}_$modeTag"
+                    if (sig != lastNotificationSignature) {
+                        lastNotificationSignature = sig
+                        notificationManager.notify(NOTIFICATION_ID, buildTelemetryNotification())
+                    }
+                }
 
                 // Check thermal threshold
                 if (thermal.enabled && (battery.temperatureC >= thermal.criticalThresholdC || repository.cpuTempFlow.value >= 75.0f)) {
@@ -89,7 +114,7 @@ class DragonMonitorService : Service() {
                     db.telemetryLogDao().pruneOldLogs()
                 }
 
-                delay(2500L)
+                delay(3500L)
             }
         }
     }
@@ -98,73 +123,92 @@ class DragonMonitorService : Service() {
         val repository = KernelRepository.getInstance(applicationContext)
         val battery = repository.batteryFlow.value
         val profile = repository.activeProfileFlow.value
-        val cpuTemp = repository.cpuTempFlow.value
-
         val customProfile = repository.activeCustomProfileFlow.value
-        val title = if (customProfile != null) {
-            "Dragon Kernel Manager | ${customProfile.title} [CUSTOM]"
-        } else {
-            "Dragon Kernel Manager | ${profile.title} [${profile.name}]"
-        }
+        val modeTag = customProfile?.title ?: profile.title
 
-        // PendingIntent to open minimal ProfilePopupActivity directly without launching the full app
+        // PendingIntent to open compact ProfilePopupActivity directly without launching the full app
         val profileIntent = Intent(this, com.example.ui.ProfilePopupActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
-        val pendingIntent = PendingIntent.getActivity(
+        val changeProfilePendingIntent = PendingIntent.getActivity(
             this,
             1001,
             profileIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val contentText = if (battery.isCharging) {
-            String.format(
-                Locale.US,
-                "⚡ Rate: %s | Bat: %d%% (%.1f°C) | CPU: %.1f°C",
-                battery.chargeRateFormatted,
-                battery.levelPercent,
-                battery.temperatureC,
-                cpuTemp
-            )
-        } else {
-            String.format(
-                Locale.US,
-                "🔋 Rate: %s | Bat: %d%% (%.1f°C) | CPU: %.1f°C",
-                battery.chargeRateFormatted,
-                battery.levelPercent,
-                battery.temperatureC,
-                cpuTemp
-            )
-        }
+        // Clean, borderless, simple 6-line real-time telemetry matching the screenshot
+        val absMa = abs(battery.currentMa)
+        val wattsVal = battery.livePowerWatts
+        val line1Power = String.format(
+            Locale.US,
+            "%d%% • %d mA (%.1f W) • %.0f°C",
+            battery.levelPercent,
+            absMa,
+            wattsVal,
+            battery.temperatureC
+        )
+        val line2Drain = String.format(
+            Locale.US,
+            "Active: %.1f%%/h • Idle: %.1f%%/h",
+            battery.activeDrainPerHour,
+            battery.idleDrainPerHour
+        )
+        val line3ScreenOn = String.format(
+            Locale.US,
+            "Screen On: %s • %.1f%% (%d mAh)",
+            battery.screenOnTimeFormatted,
+            battery.screenOnDrainPercent,
+            battery.screenOnDrainMah
+        )
+        val line4ScreenOff = String.format(
+            Locale.US,
+            "Screen Off: %s • %.1f%% (%d mAh)",
+            battery.screenOffTimeFormatted,
+            battery.screenOffDrainPercent,
+            battery.screenOffDrainMah
+        )
+        val line5DeepSleep = String.format(
+            Locale.US,
+            "Deep sleep: %s • %.1f%%",
+            battery.deepSleepTimeFormatted,
+            battery.deepSleepPercent
+        )
+        val line6Awake = String.format(
+            Locale.US,
+            "Awake: %s • %.1f%%",
+            battery.awakeTimeFormatted,
+            battery.awakePercent
+        )
 
-        val bigText = StringBuilder().apply {
-            append("• Live Charging Rate: ").append(battery.chargeRateFormatted).append("\n")
-            append("• Battery Telemetry: ").append(battery.levelPercent).append("% (").append(String.format(Locale.US, "%.1f°C", battery.temperatureC)).append(") | Voltage: ").append(battery.voltageMv).append(" mV\n")
-            append("• Profile: ").append(customProfile?.description ?: profile.description).append("\n")
-            append("• CPU Temp: ").append(String.format(Locale.US, "%.1f°C", cpuTemp))
-            append(" | GPU: ").append(repository.gpuConfigFlow.value.curFreqMhz).append(" MHz")
-            if (battery.isBypassCharging) {
-                append("\n• Bypass Charging: ACTIVE (Direct Motherboard Power)")
-            }
-            if (battery.isNightChargingActive) {
-                append("\n• Night Charging Guard: ACTIVE (Cap: ").append(repository.chargingControlsFlow.value.nightCharging.targetLimitPercent).append("% • Bypass Protection)")
-            }
-        }.toString()
+        val expandedBody = buildString {
+            appendLine(line2Drain)
+            appendLine(line3ScreenOn)
+            appendLine(line4ScreenOff)
+            appendLine(line5DeepSleep)
+            append(line6Awake)
+        }
 
         return NotificationCompat.Builder(this, DragonKernelApp.CHANNEL_TELEMETRY)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle(title)
-            .setContentText(contentText)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(bigText))
-            .setContentIntent(pendingIntent)
+            .setContentTitle(line1Power)
+            .setContentText("$line2Drain • $line3ScreenOn")
+            .setSubText(modeTag)
+            .setStyle(
+                NotificationCompat.BigTextStyle()
+                    .setBigContentTitle(line1Power)
+                    .bigText(expandedBody)
+            )
+            .setContentIntent(changeProfilePendingIntent)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
+            .setShowWhen(false)
+            .setSilent(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .addAction(
-                R.drawable.ic_launcher_foreground,
-                "⚡ Switch Profile",
-                pendingIntent
+                0,
+                "Change Battery Profile",
+                changeProfilePendingIntent
             )
             .build()
     }
@@ -183,23 +227,13 @@ class DragonMonitorService : Service() {
 
         val warningNotification = NotificationCompat.Builder(this, DragonKernelApp.CHANNEL_THERMAL_ALERT)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle("🔥 Critical Thermal Warning!")
+            .setContentTitle("Thermal Alert • POCO F6")
             .setContentText(
                 String.format(
                     Locale.US,
-                    "POCO F6 thermals high! Bat: %.1f°C | CPU: %.1f°C. Tap to apply Power Saving cooling.",
+                    "BAT %.1f°C • CPU %.1f°C — Tap to change battery profile",
                     batTemp,
                     cpuTemp
-                )
-            )
-            .setStyle(
-                NotificationCompat.BigTextStyle().bigText(
-                    String.format(
-                        Locale.US,
-                        "Hardware temperature warning triggered! Battery is at %.1f°C and CPU is at %.1f°C. Tap here to immediately switch to Extreme Battery Saver / Cooling mode to prevent hardware throttling or battery degradation.",
-                        batTemp,
-                        cpuTemp
-                    )
                 )
             )
             .setContentIntent(pendingIntent)
@@ -223,6 +257,9 @@ class DragonMonitorService : Service() {
         const val ACTION_START_SERVICE = "com.example.dragonkernel.START_MONITOR"
         const val ACTION_STOP_SERVICE = "com.example.dragonkernel.STOP_MONITOR"
         const val ACTION_OPEN_PROFILES = "com.example.dragonkernel.ACTION_OPEN_PROFILES"
+        const val ACTION_QUICK_GAMING = "com.example.dragonkernel.QUICK_GAMING"
+        const val ACTION_QUICK_BALANCED = "com.example.dragonkernel.QUICK_BALANCED"
+        const val ACTION_CYCLE_PROFILE = "com.example.dragonkernel.CYCLE_PROFILE"
 
         fun startService(context: Context) {
             val intent = Intent(context, DragonMonitorService::class.java).apply {
