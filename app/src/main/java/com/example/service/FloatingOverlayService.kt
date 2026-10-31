@@ -29,6 +29,10 @@ class FloatingOverlayService : Service() {
 
     private var windowManager: WindowManager? = null
     private var overlayView: LinearLayout? = null
+    private var fpsRowView: TextView? = null
+    private var cpuRowView: TextView? = null
+    private var batRowView: TextView? = null
+    private var gpuRowView: TextView? = null
     private val scope = CoroutineScope(Dispatchers.Main + Job())
     private var updateJob: Job? = null
 
@@ -49,6 +53,14 @@ class FloatingOverlayService : Service() {
     private fun setupOverlayView() {
         val wm = windowManager ?: return
 
+        val dm = getSystemService(Context.DISPLAY_SERVICE) as? android.hardware.display.DisplayManager
+        val defaultDisplay = dm?.getDisplay(android.view.Display.DEFAULT_DISPLAY)
+        val activeMode = defaultDisplay?.mode
+        val peakMode = defaultDisplay?.supportedModes
+            ?.filter { activeMode == null || (it.physicalWidth == activeMode.physicalWidth && it.physicalHeight == activeMode.physicalHeight) }
+            ?.maxByOrNull { it.refreshRate }
+            ?: defaultDisplay?.supportedModes?.maxByOrNull { it.refreshRate }
+
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -59,12 +71,18 @@ class FloatingOverlayService : Service() {
                 WindowManager.LayoutParams.TYPE_PHONE
             },
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                     WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
             x = 40
             y = 120
+            // Prevent overlay window from down-voting the whole-device refresh rate to 60Hz
+            if (peakMode != null && peakMode.refreshRate > 60.5f) {
+                preferredDisplayModeId = peakMode.modeId
+                preferredRefreshRate = peakMode.refreshRate
+            }
         }
 
         val container = LinearLayout(this).apply {
@@ -76,7 +94,26 @@ class FloatingOverlayService : Service() {
                 cornerRadius = dpToPx(12).toFloat()
                 setStroke(dpToPx(1), 0xFFFF2A44.toInt())
             }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                try {
+                    setRequestedFrameRate(View.REQUESTED_FRAME_RATE_CATEGORY_NO_PREFERENCE)
+                } catch (_: Throwable) {
+                }
+            }
         }
+
+        val header = TextView(this).apply {
+            text = "⚡ DRAGON HUD"
+            setTextColor(0xFFFF3B30.toInt())
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        }
+        container.addView(header)
+
+        fpsRowView = createTextRow("FPS: --", 0xFF00E5FF.toInt()).also { container.addView(it) }
+        cpuRowView = createTextRow("CPU: --", 0xFFFF9F0A.toInt()).also { container.addView(it) }
+        batRowView = createTextRow("BAT: --", 0xFFFFD600.toInt()).also { container.addView(it) }
+        gpuRowView = createTextRow("GPU: --", 0xFF00E676.toInt()).also { container.addView(it) }
 
         // Draggable touch listener
         container.setOnTouchListener(object : View.OnTouchListener {
@@ -120,37 +157,21 @@ class FloatingOverlayService : Service() {
                 val gpu = repository.gpuConfigFlow.value
                 val fps = repository.currentFpsFlow.value
 
-                overlayView?.let { container ->
-                    container.removeAllViews()
-
-                    val header = TextView(this@FloatingOverlayService).apply {
-                        text = "⚡ DRAGON HUD"
-                        setTextColor(0xFFFF3B30.toInt())
-                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-                        setTypeface(typeface, android.graphics.Typeface.BOLD)
-                    }
-                    container.addView(header)
-
-                    if (cfg.showFps) {
-                        val tv = createTextRow("FPS: $fps / 120Hz", 0xFF00E5FF.toInt())
-                        container.addView(tv)
-                    }
-                    if (cfg.showCpuTemp) {
-                        val tv = createTextRow(String.format(Locale.US, "CPU: %.1f°C", cpuTemp), 0xFFFF9F0A.toInt())
-                        container.addView(tv)
-                    }
-                    if (cfg.showBatTemp) {
-                        val tv = createTextRow(String.format(Locale.US, "BAT: %.1f°C", battery.temperatureC), 0xFFFFD600.toInt())
-                        container.addView(tv)
-                    }
-                    if (cfg.showGpuClock) {
-                        val tv = createTextRow("GPU: ${gpu.curFreqMhz} MHz", 0xFF00E676.toInt())
-                        container.addView(tv)
-                    }
-                    if (cfg.showRamUsage) {
-                        val tv = createTextRow("RAM: 6.4 / 12 GB", 0xFFBB86FC.toInt())
-                        container.addView(tv)
-                    }
+                fpsRowView?.apply {
+                    visibility = if (cfg.showFps) View.VISIBLE else View.GONE
+                    if (cfg.showFps) text = "FPS: $fps"
+                }
+                cpuRowView?.apply {
+                    visibility = if (cfg.showCpuTemp) View.VISIBLE else View.GONE
+                    if (cfg.showCpuTemp) text = String.format(Locale.US, "CPU: %.1f°C", cpuTemp)
+                }
+                batRowView?.apply {
+                    visibility = if (cfg.showBatTemp) View.VISIBLE else View.GONE
+                    if (cfg.showBatTemp) text = String.format(Locale.US, "BAT: %.1f°C", battery.temperatureC)
+                }
+                gpuRowView?.apply {
+                    visibility = if (cfg.showGpuClock) View.VISIBLE else View.GONE
+                    if (cfg.showGpuClock) text = "GPU: ${gpu.curFreqMhz} MHz"
                 }
 
                 delay(1000L)
@@ -164,6 +185,12 @@ class FloatingOverlayService : Service() {
             setTextColor(color)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             typeface = android.graphics.Typeface.MONOSPACE
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                try {
+                    setRequestedFrameRate(View.REQUESTED_FRAME_RATE_CATEGORY_NO_PREFERENCE)
+                } catch (_: Throwable) {
+                }
+            }
         }
     }
 

@@ -87,6 +87,7 @@ fun ProfileSelectionDialog(
                 BatteryProfile.values().forEach { profile ->
                     val isSelected = (activeCustomProfile == null && profile == currentProfile)
                     val icon: ImageVector = when (profile) {
+                        BatteryProfile.DEFAULT -> Icons.Default.Memory
                         BatteryProfile.AUTO -> Icons.Default.AutoMode
                         BatteryProfile.GAMING -> Icons.Default.SportsEsports
                         BatteryProfile.PERFORMANCE -> Icons.Default.Speed

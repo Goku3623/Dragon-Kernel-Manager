@@ -35,6 +35,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        ensureUnrestrictedHighRefreshRateWindow()
 
         handleIntent(intent)
 
@@ -77,6 +78,46 @@ class MainActivity : ComponentActivity() {
                     onResetProfileDialogFlag = { openProfileDialogOnLaunch.value = false }
                 )
             }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        ensureUnrestrictedHighRefreshRateWindow()
+    }
+
+    private fun ensureUnrestrictedHighRefreshRateWindow() {
+        try {
+            val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                this.display
+            } else {
+                @Suppress("DEPRECATION")
+                windowManager.defaultDisplay
+            } ?: return
+
+            val supportedModes = display.supportedModes
+            if (supportedModes.isEmpty()) return
+
+            val activeMode = display.mode
+            // Select the highest refresh rate mode matching current resolution so the window never caps the display at 60Hz
+            val peakMode = supportedModes
+                .filter { it.physicalWidth == activeMode.physicalWidth && it.physicalHeight == activeMode.physicalHeight }
+                .maxByOrNull { it.refreshRate }
+                ?: supportedModes.maxByOrNull { it.refreshRate }
+
+            val params = window.attributes
+            if (peakMode != null && peakMode.refreshRate > 60.5f) {
+                if (params.preferredDisplayModeId != peakMode.modeId || params.preferredRefreshRate < peakMode.refreshRate) {
+                    params.preferredDisplayModeId = peakMode.modeId
+                    params.preferredRefreshRate = peakMode.refreshRate
+                    window.attributes = params
+                }
+            } else if (params.preferredDisplayModeId != 0 || params.preferredRefreshRate != 0f) {
+                params.preferredDisplayModeId = 0
+                params.preferredRefreshRate = 0f
+                window.attributes = params
+            }
+        } catch (_: Exception) {
         }
     }
 

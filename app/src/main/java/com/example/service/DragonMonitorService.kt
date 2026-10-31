@@ -66,9 +66,9 @@ class DragonMonitorService : Service() {
                     triggerThermalWarning(battery.temperatureC, repository.cpuTempFlow.value)
                 }
 
-                // Log to database once per minute
+                // Log to database once per minute when logging is enabled
                 val now = System.currentTimeMillis()
-                if (now - lastLogTime >= 60_000L) {
+                if (repository.isLoggingEnabledFlow.value && now - lastLogTime >= 60_000L) {
                     lastLogTime = now
                     val db = DragonDatabase.getInstance(applicationContext)
                     db.telemetryLogDao().insertLog(

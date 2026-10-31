@@ -1,7 +1,12 @@
 package com.example.ui.screens
 
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -17,7 +22,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
@@ -29,7 +37,11 @@ import com.example.data.db.DragonDatabase
 import com.example.data.db.ScriptEntity
 import com.example.data.export.LogExportSyncManager
 import com.example.data.model.AppManagerItem
+import com.example.data.model.FpsOverlayConfig
+import com.example.data.model.FpsRecordedSession
+import com.example.data.model.FpsRecorderConfig
 import com.example.data.repository.KernelRepository
+import com.example.service.FloatingOverlayService
 import com.example.ui.theme.*
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -43,15 +55,21 @@ fun ToolsScreen(repository: KernelRepository) {
     val clipboardManager = LocalClipboardManager.current
 
     var selectedToolSection by remember { mutableStateOf(0) }
-    // 0: App Freezer, 1: VRAM, 2: DexOpt, 3: Scripts, 4: Logs & Sync
-    val toolTabs = listOf("App Freezer", "VRAM", "DexOpt", "Scripts", "Logs & Sync")
+    // 0: FPS, 1: App Freezer, 2: VRAM, 3: DexOpt, 4: Scripts, 5: Logs & Sync
+    val toolTabs = listOf("FPS", "App Freezer", "VRAM", "DexOpt", "Scripts", "Logs & Sync")
 
+    val currentFps by repository.currentFpsFlow.collectAsState()
+    val fpsHistory by repository.fpsHistoryFlow.collectAsState()
+    val isRecordingFps by repository.isRecordingFpsFlow.collectAsState()
+    val fpsRecorderConfig by repository.fpsRecorderConfigFlow.collectAsState()
+    val fpsOverlayConfig by repository.fpsOverlayConfigFlow.collectAsState()
     val vramConfig by repository.vramConfigFlow.collectAsState()
     val dexOptConfig by repository.dexOptConfigFlow.collectAsState()
     val apps by repository.appsFlow.collectAsState()
     val thermalConfig by repository.thermalConfigFlow.collectAsState()
     val accentIndex by repository.accentColorIndexFlow.collectAsState()
     val isAmoledBlack by repository.isAmoledBlackFlow.collectAsState()
+    val isLoggingEnabled by repository.isLoggingEnabledFlow.collectAsState()
 
     val db = remember { DragonDatabase.getInstance(context) }
     val scripts by db.scriptDao().getAllScripts().collectAsState(initial = emptyList())
@@ -90,9 +108,10 @@ fun ToolsScreen(repository: KernelRepository) {
         }
 
         item {
-            // Tool subtabs (No FPS, No DPI/Resolution changer)
-            PrimaryTabRow(
+            // Tool subtabs (FrameGen before App Freezer)
+            ScrollableTabRow(
                 selectedTabIndex = selectedToolSection,
+                edgePadding = 4.dp,
                 containerColor = MaterialTheme.colorScheme.surface,
                 contentColor = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.clip(RoundedCornerShape(12.dp))
@@ -110,6 +129,21 @@ fun ToolsScreen(repository: KernelRepository) {
 
         when (selectedToolSection) {
             0 -> {
+                // FPS MONITOR & SESSION RECORDER (REDFOX KERNEL MANAGER STYLE)
+                item {
+                    FpsMonitorSection(
+                        currentFps = currentFps,
+                        fpsHistory = fpsHistory,
+                        isRecording = isRecordingFps,
+                        recorderConfig = fpsRecorderConfig,
+                        overlayConfig = fpsOverlayConfig,
+                        installedApps = apps,
+                        repository = repository
+                    )
+                }
+            }
+
+            1 -> {
                 // APP FREEZER & RESTRICT AUTOSTART (WITH MULTI-SELECT)
                 item {
                     var appSearchQuery by remember { mutableStateOf("") }
@@ -241,7 +275,7 @@ fun ToolsScreen(repository: KernelRepository) {
                 }
             }
 
-            1 -> {
+            2 -> {
                 // VRAM & MEMORY TUNING
                 item {
                     VramTuningSection(
@@ -251,7 +285,7 @@ fun ToolsScreen(repository: KernelRepository) {
                 }
             }
 
-            2 -> {
+            3 -> {
                 // DEXOPT ART COMPILATION CARD
                 item {
                     Card(
@@ -323,7 +357,7 @@ fun ToolsScreen(repository: KernelRepository) {
                 }
             }
 
-            3 -> {
+            4 -> {
                 // SCRIPT MANAGER (PRESETS & USER SCRIPTS)
                 item {
                     var showNewScriptDialog by remember { mutableStateOf(false) }
@@ -402,7 +436,7 @@ fun ToolsScreen(repository: KernelRepository) {
                 }
             }
 
-            4 -> {
+            5 -> {
                 // LOG HISTORY, POWER HEALTH TRACKING, CLOUD SYNC & THEME CUSTOMIZATION
                 item {
                     // Theme Customizer & Dark Mode Card
@@ -637,7 +671,7 @@ fun ToolsScreen(repository: KernelRepository) {
                 }
 
                 item {
-                    // Log History Table Card
+                    // Log History Table Card with Log Enable-Disable Button
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(18.dp),
@@ -650,13 +684,75 @@ fun ToolsScreen(repository: KernelRepository) {
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text("Recent Hardware Telemetry Records", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                TextButton(
-                                    onClick = { coroutineScope.launch { db.telemetryLogDao().clearAll() } }
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = if (isLoggingEnabled) Icons.Default.FiberManualRecord else Icons.Default.PauseCircleOutline,
+                                        contentDescription = "Logging Status",
+                                        tint = if (isLoggingEnabled) SuccessGreen else WarningOrange,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Column {
+                                        Text("Hardware Telemetry Logging", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                        Text(
+                                            if (isLoggingEnabled) "Active • Recording hardware telemetry logs"
+                                            else "Paused • Telemetry logging is currently disabled",
+                                            fontSize = 11.sp,
+                                            color = if (isLoggingEnabled) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                Switch(
+                                    checked = isLoggingEnabled,
+                                    onCheckedChange = { repository.toggleTelemetryLogging(it) }
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(
+                                    onClick = { repository.toggleTelemetryLogging(!isLoggingEnabled) },
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (isLoggingEnabled) WarningOrange else SuccessGreen
+                                    )
                                 ) {
-                                    Text("Clear", fontSize = 11.sp, color = DangerRed)
+                                    Icon(
+                                        imageVector = if (isLoggingEnabled) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                        tint = Color.Black
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = if (isLoggingEnabled) "Disable Logging" else "Enable Logging",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.Black
+                                    )
+                                }
+
+                                OutlinedButton(
+                                    onClick = { coroutineScope.launch { db.telemetryLogDao().clearAll() } },
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Icon(Icons.Default.DeleteOutline, contentDescription = null, tint = DangerRed, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Clear Logs", fontSize = 12.sp, color = DangerRed, fontWeight = FontWeight.Bold)
                                 }
                             }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+                            HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            Text("Recent Hardware Telemetry Records", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Spacer(modifier = Modifier.height(6.dp))
 
                             val df = SimpleDateFormat("HH:mm:ss", Locale.US)
                             recentLogs.take(15).forEach { log ->
@@ -860,8 +956,12 @@ fun VramTuningSection(
     var vfsPressure by remember(vramConfig.vfsCachePressure) { mutableStateOf(vramConfig.vfsCachePressure.toFloat()) }
     var pageCluster by remember(vramConfig.pageCluster) { mutableStateOf(vramConfig.pageCluster) }
 
+    LaunchedEffect(Unit) {
+        repository.grantRootAndRefreshRamInfo()
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        // 1. Hardware Architecture & Live Memory Allocation Telemetry
+        // 1. Hardware Architecture & Live Memory Allocation Telemetry (Real Device /proc/meminfo + Root zram0/KGSL)
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(18.dp),
@@ -874,38 +974,105 @@ fun VramTuningSection(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Icon(Icons.Default.Memory, contentDescription = "RAM & VRAM", tint = MaterialTheme.colorScheme.primary)
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Unified Memory Architecture (UMA)", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        Column {
+                            Text("Device Physical RAM & VRAM Telemetry", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                            Text(
+                                text = vramConfig.ramHardwareInfo,
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
-                    Badge(containerColor = MaterialTheme.colorScheme.primaryContainer) {
-                        Text("Adreno 735", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
+                    Badge(
+                        containerColor = if (vramConfig.isRootMemoryAccessGranted) SuccessGreen.copy(alpha = 0.2f)
+                        else MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = if (vramConfig.isRootMemoryAccessGranted) SuccessGreen
+                        else MaterialTheme.colorScheme.primary
+                    ) {
+                        Text(
+                            text = if (vramConfig.isRootMemoryAccessGranted) "ROOT KERNEL" else "${vramConfig.hardwareRamTierGb} GB RAM",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 10.sp
+                        )
                     }
                 }
 
-                Text(
-                    text = "Snapdragon 8s Gen 3 (SM8635) shares 12 GB LPDDR5X (8533 Mbps) memory between Kryo CPU and Adreno 735 GPU with dynamic kernel carveouts.",
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(vertical = 4.dp)
-                )
-
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Memory Allocation Progress Bar
-                val usedRatio = (vramConfig.usedRamMb.toFloat() / vramConfig.totalRamMb).coerceIn(0f, 1f)
+                // Root Kernel Memory Telemetry Source Box
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(
+                            if (vramConfig.isRootMemoryAccessGranted) SuccessGreen.copy(alpha = 0.12f)
+                            else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+                        )
+                        .border(
+                            1.dp,
+                            if (vramConfig.isRootMemoryAccessGranted) SuccessGreen.copy(alpha = 0.55f)
+                            else MaterialTheme.colorScheme.outline.copy(alpha = 0.25f),
+                            RoundedCornerShape(12.dp)
+                        )
+                        .padding(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            modifier = Modifier.weight(1f),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = if (vramConfig.isRootMemoryAccessGranted) Icons.Default.VerifiedUser else Icons.Default.Info,
+                                contentDescription = null,
+                                tint = if (vramConfig.isRootMemoryAccessGranted) SuccessGreen else MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Column {
+                                Text(
+                                    text = vramConfig.memorySourceStatus,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (vramConfig.isRootMemoryAccessGranted) SuccessGreen else MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "/proc/meminfo • /sys/block/zram0/mm_stat • /sys/class/kgsl/kgsl-3d0/page_alloc",
+                                    fontSize = 9.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Physical RAM Allocation Progress Bar
+                val safeTotalMb = vramConfig.totalRamMb.coerceAtLeast(1)
+                val usedRatio = (vramConfig.usedRamMb.toFloat() / safeTotalMb.toFloat()).coerceIn(0f, 1f)
 
                 Column {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text("Physical RAM Usage", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text("Physical RAM Usage (Used / Total)", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         Text(
-                            "${vramConfig.usedRamMb} MB / ${vramConfig.totalRamMb} MB (${((usedRatio * 100).toInt())}%)",
+                            "${vramConfig.usedRamMb} MB / ${vramConfig.totalRamMb} MB (${(usedRatio * 100).toInt()}%)",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
                             color = MaterialTheme.colorScheme.primary
                         )
                     }
@@ -916,41 +1083,116 @@ fun VramTuningSection(
                             .fillMaxWidth()
                             .height(10.dp)
                             .clip(RoundedCornerShape(5.dp)),
-                        color = MaterialTheme.colorScheme.primary,
+                        color = if (usedRatio > 0.85f) DangerRed else MaterialTheme.colorScheme.primary,
                         trackColor = MaterialTheme.colorScheme.surfaceVariant
                     )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Available: ${vramConfig.availableRamMb} MB (Free: ${vramConfig.freeRamMb} MB)",
+                            fontSize = 10.sp,
+                            color = SuccessGreen,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "Page Cache + Buffers: ${vramConfig.cachedRamMb} MB",
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // 4 Telemetry Tiles
+                // Primary 4 Telemetry Tiles (Real Device Values)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     MemoryStatTile(
                         title = "TOTAL RAM",
-                        value = "12 GB",
-                        sub = "LPDDR5X",
+                        value = "${vramConfig.hardwareRamTierGb} GB",
+                        sub = "${vramConfig.totalRamMb} MB",
                         modifier = Modifier.weight(1f)
                     )
                     MemoryStatTile(
-                        title = "ACTIVE VRAM",
-                        value = if (vramSize == 0) "Auto" else "${vramSize} GB",
-                        sub = if (vramSize == 0) "Dynamic" else "Carveout",
+                        title = "AVAILABLE",
+                        value = "${vramConfig.availableRamMb} MB",
+                        sub = "${vramConfig.freeRamMb} MB Free",
+                        modifier = Modifier.weight(1f)
+                    )
+                    MemoryStatTile(
+                        title = "GPU / VRAM",
+                        value = "${vramConfig.gpuVramAllocatedMb} MB",
+                        sub = if (vramSize == 0) "Dynamic KGSL" else "${vramSize}GB Limit",
                         modifier = Modifier.weight(1f)
                     )
                     MemoryStatTile(
                         title = "zRAM SWAP",
                         value = "${vramConfig.zramUsedMb} MB",
-                        sub = if (zramSize == 0) "Off" else "${zramSize} GB ($zramAlgo)",
+                        sub = "/ ${vramConfig.swapTotalMb} MB ($zramAlgo)",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Secondary 4 Kernel Memory Breakdown Tiles (/proc/meminfo & zram0 mm_stat)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    MemoryStatTile(
+                        title = "APP ANON RAM",
+                        value = "${vramConfig.anonRamMb} MB",
+                        sub = "AnonPages",
                         modifier = Modifier.weight(1f)
                     )
                     MemoryStatTile(
-                        title = "SWAPPINESS",
-                        value = "${swappiness.toInt()}",
-                        sub = "/ 200",
+                        title = "CACHED + BUF",
+                        value = "${vramConfig.cachedRamMb} MB",
+                        sub = "Buf: ${vramConfig.buffersMb} MB",
                         modifier = Modifier.weight(1f)
+                    )
+                    MemoryStatTile(
+                        title = "KERNEL SLAB",
+                        value = "${vramConfig.slabKernelMb} MB",
+                        sub = "Slab + Pgtbl",
+                        modifier = Modifier.weight(1f)
+                    )
+                    MemoryStatTile(
+                        title = "zRAM RATIO",
+                        value = String.format(java.util.Locale.US, "%.2fx", vramConfig.zramCompressionRatio),
+                        sub = "${vramConfig.zramCompressedRamMb} MB RAM",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Button(
+                    onClick = { repository.grantRootAndRefreshRamInfo() },
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (vramConfig.isRootMemoryAccessGranted) SuccessGreen else MaterialTheme.colorScheme.primary
+                    )
+                ) {
+                    Icon(
+                        Icons.Default.AdminPanelSettings,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = if (vramConfig.isRootMemoryAccessGranted) Color.Black else MaterialTheme.colorScheme.onPrimary
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Grant Root Permissions & Refresh Real Device RAM / zRAM Info",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (vramConfig.isRootMemoryAccessGranted) Color.Black else MaterialTheme.colorScheme.onPrimary
                     )
                 }
             }
@@ -1345,3 +1587,994 @@ fun MemoryStatTile(
         }
     }
 }
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun FpsMonitorSection(
+    currentFps: Int,
+    fpsHistory: List<Int>,
+    isRecording: Boolean,
+    recorderConfig: FpsRecorderConfig,
+    overlayConfig: FpsOverlayConfig,
+    installedApps: List<AppManagerItem>,
+    repository: KernelRepository
+) {
+    val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
+    val coroutineScope = rememberCoroutineScope()
+    var showTargetAppDialog by remember { mutableStateOf(false) }
+    var appSearchQuery by remember { mutableStateOf("") }
+    var customAppName by remember { mutableStateOf(recorderConfig.targetAppName) }
+    var customPkgName by remember { mutableStateOf(recorderConfig.targetPackageName) }
+
+    if (showTargetAppDialog) {
+        val candidateApps = installedApps.filter { app ->
+            !app.isSystem &&
+                (app.appName.contains(appSearchQuery, ignoreCase = true) ||
+                    app.packageName.contains(appSearchQuery, ignoreCase = true))
+        }
+
+        AlertDialog(
+            onDismissRequest = { showTargetAppDialog = false },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.SportsEsports, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Select Target App for FPS Recording", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                }
+            },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        "Choose an installed game/app or enter a custom package to monitor and benchmark with Dragon FPS Monitor & Recorder:",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    OutlinedTextField(
+                        value = customAppName,
+                        onValueChange = { customAppName = it },
+                        label = { Text("Application / Game Name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    OutlinedTextField(
+                        value = customPkgName,
+                        onValueChange = { customPkgName = it },
+                        label = { Text("Package Name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                customAppName = "Global SurfaceFlinger (All Apps)"
+                                customPkgName = "surfaceflinger.global"
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Icon(Icons.Default.Public, contentDescription = null, modifier = Modifier.size(15.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Monitor Global Display Surface", fontSize = 11.sp)
+                        }
+                    }
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+
+                    OutlinedTextField(
+                        value = appSearchQuery,
+                        onValueChange = { appSearchQuery = it },
+                        placeholder = { Text("Search installed games/apps...") },
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 160.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        candidateApps.take(5).forEach { app ->
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        customAppName = app.appName
+                                        customPkgName = app.packageName
+                                    },
+                                shape = RoundedCornerShape(8.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (customPkgName == app.packageName)
+                                        MaterialTheme.colorScheme.primaryContainer
+                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                                )
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(app.appName, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                                        Text(app.packageName, fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                                    }
+                                    Icon(Icons.Default.CheckCircleOutline, contentDescription = "Select", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (customAppName.isNotBlank() && customPkgName.isNotBlank()) {
+                            repository.updateFpsRecorderConfig(
+                                recorderConfig.copy(
+                                    targetAppName = customAppName.trim(),
+                                    targetPackageName = customPkgName.trim()
+                                )
+                            )
+                            showTargetAppDialog = false
+                        }
+                    }
+                ) {
+                    Text("Set Target", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showTargetAppDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        // 1. Dragon FPS Monitor & Recorder Live Telemetry + Real-Time Graph Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = CardDefaults.outlinedCardBorder()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Speed,
+                            contentDescription = "FPS Monitor",
+                            tint = if (isRecording) DangerRed else MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text("Dragon FPS Monitor & Recorder", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                            Text(
+                                text = if (isRecording)
+                                    "RECORDING LIVE • ${recorderConfig.targetAppName} (${recorderConfig.elapsedRecordingSec}s)"
+                                else
+                                    "Target: ${recorderConfig.targetAppName} • ${recorderConfig.captureSource}",
+                                fontSize = 10.sp,
+                                fontWeight = if (isRecording) FontWeight.Bold else FontWeight.Normal,
+                                color = if (isRecording) DangerRed else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Badge(
+                        containerColor = if (isRecording) DangerRed.copy(alpha = 0.2f) else MaterialTheme.colorScheme.primaryContainer
+                    ) {
+                        Text(
+                            text = if (isRecording) "REC ● ${recorderConfig.elapsedRecordingSec}s" else "$currentFps FPS",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = if (isRecording) DangerRed else MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Root Hardware Sensor Source & Permission Grant Row
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+                        .padding(horizontal = 10.dp, vertical = 7.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "ACTIVE FPS SENSOR SOURCE",
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = recorderConfig.liveHardwareSourceStatus,
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = { repository.requestRootFpsPermissionAndRefresh() },
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Security,
+                            contentDescription = "Grant Root FPS Permission",
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Root FPS Access", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Primary FPS & Frametime Hero Banner
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                        .padding(12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text("LIVE FRAME RATE", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(verticalAlignment = Alignment.Bottom) {
+                            Text(
+                                text = "$currentFps",
+                                fontSize = 30.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "FPS",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(bottom = 4.dp)
+                            )
+                        }
+                        Text(
+                            text = "Frametime: ${String.format(Locale.US, "%.2f", recorderConfig.currentFrameTimeMs)} ms",
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = SuccessGreen
+                        )
+                    }
+
+                    Column(horizontalAlignment = Alignment.End) {
+                        Button(
+                            onClick = { repository.toggleFpsRecording() },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isRecording) DangerRed else MaterialTheme.colorScheme.primary
+                            ),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isRecording) Icons.Default.StopCircle else Icons.Default.FiberManualRecord,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = if (isRecording) "Stop & Save Session" else "Start FPS Recording",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = if (recorderConfig.durationPresetSec == 0) "Mode: Manual Stop"
+                            else "Auto-Stop: ${recorderConfig.durationPresetSec}s",
+                            fontSize = 9.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Real-time FPS & 1% Low Canvas Graph
+                LiveFpsFrametimeGraph(
+                    samples = fpsHistory,
+                    alertThreshold = recorderConfig.fpsDropAlertThreshold,
+                    primaryColor = MaterialTheme.colorScheme.primary
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // 6 Detailed Telemetry Stat Tiles (Avg, 1% Low, 0.1% Low, Min/Max, Stability, Jank)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    MemoryStatTile(
+                        title = "AVG FPS",
+                        value = String.format(Locale.US, "%.1f", recorderConfig.liveAvgFps),
+                        sub = "${String.format(Locale.US, "%.1f", recorderConfig.currentFrameTimeMs)} ms",
+                        modifier = Modifier.weight(1f)
+                    )
+                    MemoryStatTile(
+                        title = "1% LOW",
+                        value = "${recorderConfig.liveOnePercentLowFps}",
+                        sub = "FPS",
+                        modifier = Modifier.weight(1f)
+                    )
+                    MemoryStatTile(
+                        title = "0.1% LOW",
+                        value = "${recorderConfig.livePointOnePercentLowFps}",
+                        sub = "FPS",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    MemoryStatTile(
+                        title = "MIN / MAX",
+                        value = "${recorderConfig.liveMinFps}/${recorderConfig.liveMaxFps}",
+                        sub = "Range",
+                        modifier = Modifier.weight(1f)
+                    )
+                    MemoryStatTile(
+                        title = "STABILITY",
+                        value = "${recorderConfig.liveStabilityPercent}%",
+                        sub = "Frame Pacing",
+                        modifier = Modifier.weight(1f)
+                    )
+                    MemoryStatTile(
+                        title = "JANK SPIKES",
+                        value = "${recorderConfig.liveJankCount}",
+                        sub = "< ${recorderConfig.fpsDropAlertThreshold} FPS",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                if (!recorderConfig.lastActionFeedback.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(SuccessGreen.copy(alpha = 0.15f))
+                            .border(1.dp, SuccessGreen.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                            .padding(10.dp)
+                    ) {
+                        Text(
+                            text = recorderConfig.lastActionFeedback ?: "",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = SuccessGreen
+                        )
+                    }
+                }
+            }
+        }
+
+        // 2. Detailed RedFox FPS Recording Configuration Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = CardDefaults.outlinedCardBorder()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Tune, contentDescription = "FPS Recorder Settings", tint = MaterialTheme.colorScheme.primary)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Detailed FPS Recording Configuration", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Target Game / App Picker Row
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                        .padding(12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("TARGET GAME / APPLICATION", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(recorderConfig.targetAppName, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                        Text(recorderConfig.targetPackageName, fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    FilledTonalButton(
+                        onClick = {
+                            customAppName = recorderConfig.targetAppName
+                            customPkgName = recorderConfig.targetPackageName
+                            showTargetAppDialog = true
+                        },
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.Apps, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Change App", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // FPS Capture Source
+                Text("Kernel / Display FPS Capture Source:", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    "Select low-level hardware counter used to sample frame delivery:",
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf(
+                        "DRM / Adreno Sysfs",
+                        "SurfaceFlinger PageFlip",
+                        "GFXInfo Framestats"
+                    ).forEach { source ->
+                        val isSelected = (recorderConfig.captureSource == source)
+                        FilterChip(
+                            selected = isSelected,
+                            onClick = {
+                                repository.updateFpsRecorderConfig(recorderConfig.copy(captureSource = source))
+                            },
+                            label = {
+                                Text(
+                                    source.substringBefore(" "),
+                                    fontSize = 10.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                    maxLines = 1
+                                )
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Sampling Interval
+                Text("Sampling / Polling Interval:", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf(
+                        100 to "100ms (Ultra)",
+                        250 to "250ms (High)",
+                        500 to "500ms",
+                        1000 to "1000ms (1s)"
+                    ).forEach { (ms, label) ->
+                        val isSelected = (recorderConfig.samplingIntervalMs == ms)
+                        FilterChip(
+                            selected = isSelected,
+                            onClick = {
+                                repository.updateFpsRecorderConfig(recorderConfig.copy(samplingIntervalMs = ms))
+                            },
+                            label = {
+                                Text(label, fontSize = 10.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal, maxLines = 1)
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Benchmark Duration Preset
+                Text("Recording Duration Preset:", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf(
+                        0 to "Manual",
+                        60 to "1 Min",
+                        180 to "3 Min",
+                        300 to "5 Min",
+                        600 to "10 Min"
+                    ).forEach { (sec, label) ->
+                        val isSelected = (recorderConfig.durationPresetSec == sec)
+                        FilterChip(
+                            selected = isSelected,
+                            onClick = {
+                                repository.updateFpsRecorderConfig(recorderConfig.copy(durationPresetSec = sec))
+                            },
+                            label = {
+                                Text(label, fontSize = 10.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal, maxLines = 1)
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Jank / Frame-Drop Threshold Slider
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Jank & Frame-Drop Alert Threshold:", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Badge(containerColor = MaterialTheme.colorScheme.primaryContainer) {
+                        Text(
+                            "< ${recorderConfig.fpsDropAlertThreshold} FPS",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+                Slider(
+                    value = recorderConfig.fpsDropAlertThreshold.toFloat(),
+                    onValueChange = {
+                        repository.updateFpsRecorderConfig(recorderConfig.copy(fpsDropAlertThreshold = it.toInt()))
+                    },
+                    valueRange = 30f..115f,
+                    steps = 16,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                // Toggles: Auto-Start on Game Launch, Jank Detection, Record Thermals & Power
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Auto-Record When Target Game Launches", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Text("Automatically starts FPS benchmark session when target package enters foreground", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(
+                        checked = recorderConfig.autoStartOnAppLaunch,
+                        onCheckedChange = {
+                            repository.updateFpsRecorderConfig(recorderConfig.copy(autoStartOnAppLaunch = it))
+                        }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Sub-Frame Jank & Micro-Stutter Detection", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Text("Flags frame pacing spikes (>16.6ms) and counts jank drops in session log", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(
+                        checked = recorderConfig.detectJankSpikes,
+                        onCheckedChange = {
+                            repository.updateFpsRecorderConfig(recorderConfig.copy(detectJankSpikes = it))
+                        }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Record CPU/Battery Thermals & GPU Load", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Text("Bundles thermal ceiling and Adreno 735 load into recorded FPS reports", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(
+                        checked = recorderConfig.recordThermalsAndPower,
+                        onCheckedChange = {
+                            repository.updateFpsRecorderConfig(recorderConfig.copy(recordThermalsAndPower = it))
+                        }
+                    )
+                }
+            }
+        }
+
+        // 3. Floating FPS Hardware HUD Overlay Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = CardDefaults.outlinedCardBorder()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                        Icon(Icons.Default.PictureInPictureAlt, contentDescription = "FPS Overlay", tint = MaterialTheme.colorScheme.primary)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text("Floating FPS & Hardware HUD Overlay", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                            Text(
+                                "Draggable on-screen FPS counter over games (FPS, CPU Temp, Bat Temp, GPU Clock)",
+                                fontSize = 10.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Switch(
+                        checked = overlayConfig.isEnabled,
+                        onCheckedChange = { enabled ->
+                            if (enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(context)) {
+                                val intent = Intent(
+                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                    Uri.parse("package:${context.packageName}")
+                                )
+                                context.startActivity(intent)
+                            } else {
+                                repository.updateFpsOverlayConfig(overlayConfig.copy(isEnabled = enabled))
+                                val serviceIntent = Intent(context, FloatingOverlayService::class.java)
+                                if (enabled) {
+                                    context.startService(serviceIntent)
+                                } else {
+                                    context.stopService(serviceIntent)
+                                }
+                            }
+                        }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    FilterChip(
+                        selected = overlayConfig.showFps,
+                        onClick = { repository.updateFpsOverlayConfig(overlayConfig.copy(showFps = !overlayConfig.showFps)) },
+                        label = { Text("FPS", fontSize = 10.sp) },
+                        modifier = Modifier.weight(1f)
+                    )
+                    FilterChip(
+                        selected = overlayConfig.showCpuTemp,
+                        onClick = { repository.updateFpsOverlayConfig(overlayConfig.copy(showCpuTemp = !overlayConfig.showCpuTemp)) },
+                        label = { Text("CPU Temp", fontSize = 10.sp) },
+                        modifier = Modifier.weight(1f)
+                    )
+                    FilterChip(
+                        selected = overlayConfig.showBatTemp,
+                        onClick = { repository.updateFpsOverlayConfig(overlayConfig.copy(showBatTemp = !overlayConfig.showBatTemp)) },
+                        label = { Text("Bat Temp", fontSize = 10.sp) },
+                        modifier = Modifier.weight(1f)
+                    )
+                    FilterChip(
+                        selected = overlayConfig.showGpuClock,
+                        onClick = { repository.updateFpsOverlayConfig(overlayConfig.copy(showGpuClock = !overlayConfig.showGpuClock)) },
+                        label = { Text("GPU MHz", fontSize = 10.sp) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+        }
+
+        // 4. Recorded FPS Benchmark Sessions History (RedFox Session Logs)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = CardDefaults.outlinedCardBorder()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Assessment, contentDescription = "Recorded Sessions", tint = MaterialTheme.colorScheme.primary)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text("Recorded FPS Benchmark Sessions", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                            Text(
+                                "${recorderConfig.recordedSessions.size} saved sessions • Detailed 1% Low, Frametime & Thermal logs",
+                                fontSize = 10.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    if (recorderConfig.recordedSessions.isNotEmpty()) {
+                        TextButton(onClick = { repository.clearAllFpsSessions() }) {
+                            Text("Clear All", fontSize = 11.sp, color = DangerRed, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                if (recorderConfig.recordedSessions.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 20.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "No recorded FPS sessions yet. Tap 'Start FPS Recording' above to capture a benchmark session.",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        recorderConfig.recordedSessions.forEach { session ->
+                            RecordedFpsSessionCard(
+                                session = session,
+                                onExportCsv = {
+                                    coroutineScope.launch {
+                                        val csvBuilder = StringBuilder()
+                                        csvBuilder.append("app_name,package_name,duration_sec,capture_source,sampling_ms,avg_fps,min_fps,max_fps,1pct_low_fps,0.1pct_low_fps,avg_frametime_ms,stability_pct,jank_frames,peak_cpu_c,peak_bat_c,avg_gpu_load_pct\n")
+                                        csvBuilder.append("\"${session.appName}\",\"${session.packageName}\",${session.durationSec},\"${session.captureSource}\",${session.samplingIntervalMs},${session.avgFps},${session.minFps},${session.maxFps},${session.onePercentLowFps},${session.pointOnePercentLowFps},${session.avgFrameTimeMs},${session.stabilityPercent},${session.jankFrameCount},${session.peakCpuTempC},${session.peakBatteryTempC},${session.avgGpuLoadPercent}\n")
+                                        LogExportSyncManager.exportAndShareFile(
+                                            context = context,
+                                            content = csvBuilder.toString(),
+                                            filename = "dragon_fps_${session.packageName.replace('.', '_')}.csv",
+                                            mimeType = "text/csv"
+                                        )
+                                    }
+                                },
+                                onCopySummary = {
+                                    val summary = "FPS Session [${session.appName}] • Avg: ${String.format(Locale.US, "%.1f", session.avgFps)} FPS | 1% Low: ${session.onePercentLowFps} FPS | 0.1% Low: ${session.pointOnePercentLowFps} FPS | Frametime: ${String.format(Locale.US, "%.2f", session.avgFrameTimeMs)} ms | Stability: ${session.stabilityPercent}% | Peak CPU: ${session.peakCpuTempC}°C"
+                                    clipboardManager.setText(AnnotatedString(summary))
+                                    Toast.makeText(context, "FPS session summary copied!", Toast.LENGTH_SHORT).show()
+                                },
+                                onDelete = { repository.deleteFpsSession(session.id) }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun LiveFpsFrametimeGraph(
+    samples: List<Int>,
+    alertThreshold: Int,
+    primaryColor: Color
+) {
+    val displaySamples = if (samples.size >= 2) samples else listOf(58, 60, 59, 57, 60, 59)
+    val sampleMin = displaySamples.minOrNull() ?: 50
+    val sampleMax = displaySamples.maxOrNull() ?: 60
+    val dynamicMinFps = (sampleMin - 12).coerceAtLeast(0).toFloat()
+    val dynamicMaxFps = (sampleMax + 8).coerceAtLeast(sampleMin + 16).toFloat()
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(115.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.Black.copy(alpha = 0.35f))
+            .border(1.dp, primaryColor.copy(alpha = 0.25f), RoundedCornerShape(12.dp))
+            .padding(10.dp)
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val w = size.width
+            val h = size.height
+            val span = (dynamicMaxFps - dynamicMinFps).coerceAtLeast(10f)
+
+            // Subtle horizontal grid lines
+            for (gridStep in 1..3) {
+                val gy = h * (gridStep / 4f)
+                drawLine(
+                    color = Color.White.copy(alpha = 0.08f),
+                    start = Offset(0f, gy),
+                    end = Offset(w, gy),
+                    strokeWidth = 1f
+                )
+            }
+
+            // Threshold reference line if within visible window
+            if (alertThreshold.toFloat() in dynamicMinFps..dynamicMaxFps) {
+                val thresholdY = h - ((alertThreshold.toFloat() - dynamicMinFps) / span).coerceIn(0f, 1f) * h
+                drawLine(
+                    color = WarningOrange.copy(alpha = 0.45f),
+                    start = Offset(0f, thresholdY),
+                    end = Offset(w, thresholdY),
+                    strokeWidth = 2f
+                )
+            }
+
+            val path = Path()
+            val stepX = if (displaySamples.size > 1) w / (displaySamples.size - 1) else w
+
+            displaySamples.forEachIndexed { index, fps ->
+                val x = index * stepX
+                val normalized = ((fps.toFloat() - dynamicMinFps) / span).coerceIn(0.05f, 0.95f)
+                val y = h - (normalized * h)
+                if (index == 0) {
+                    path.moveTo(x, y)
+                } else {
+                    path.lineTo(x, y)
+                }
+                if (index == displaySamples.lastIndex) {
+                    drawCircle(
+                        color = primaryColor,
+                        radius = 6f,
+                        center = Offset(x, y)
+                    )
+                }
+            }
+
+            drawPath(
+                path = path,
+                color = primaryColor,
+                style = Stroke(width = 4f)
+            )
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.TopStart),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = "Scale: ${dynamicMinFps.toInt()}–${dynamicMaxFps.toInt()} FPS • Live Whole-Screen",
+                fontSize = 8.sp,
+                fontFamily = FontFamily.Monospace,
+                color = Color.White.copy(alpha = 0.65f)
+            )
+            Text(
+                text = "Alert: <$alertThreshold FPS",
+                fontSize = 8.sp,
+                fontFamily = FontFamily.Monospace,
+                color = WarningOrange
+            )
+        }
+    }
+}
+
+@Composable
+fun RecordedFpsSessionCard(
+    session: FpsRecordedSession,
+    onExportCsv: () -> Unit,
+    onCopySummary: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val df = remember { SimpleDateFormat("MMM dd, HH:mm:ss", Locale.US) }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(
+                1.dp,
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.3f),
+                RoundedCornerShape(14.dp)
+            ),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+        )
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = session.appName,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Badge(containerColor = MaterialTheme.colorScheme.primaryContainer) {
+                            Text(
+                                text = "${session.durationSec}s • ${session.samplingIntervalMs}ms",
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                    Text(
+                        text = "${session.packageName} • ${df.format(Date(session.timestamp))}",
+                        fontSize = 9.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1
+                    )
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onCopySummary, modifier = Modifier.size(30.dp)) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                    }
+                    IconButton(onClick = onExportCsv, modifier = Modifier.size(30.dp)) {
+                        Icon(Icons.Default.Share, contentDescription = "Export CSV", tint = SuccessGreen, modifier = Modifier.size(16.dp))
+                    }
+                    IconButton(onClick = onDelete, modifier = Modifier.size(30.dp)) {
+                        Icon(Icons.Default.DeleteOutline, contentDescription = "Delete", tint = DangerRed, modifier = Modifier.size(16.dp))
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                MemoryStatTile(
+                    title = "AVG FPS",
+                    value = String.format(Locale.US, "%.1f", session.avgFps),
+                    sub = "${String.format(Locale.US, "%.2f", session.avgFrameTimeMs)} ms",
+                    modifier = Modifier.weight(1f)
+                )
+                MemoryStatTile(
+                    title = "1% / 0.1%",
+                    value = "${session.onePercentLowFps}/${session.pointOnePercentLowFps}",
+                    sub = "Low FPS",
+                    modifier = Modifier.weight(1f)
+                )
+                MemoryStatTile(
+                    title = "STABILITY",
+                    value = "${session.stabilityPercent}%",
+                    sub = "${session.jankFrameCount} Janks",
+                    modifier = Modifier.weight(1f)
+                )
+                MemoryStatTile(
+                    title = "PEAK TEMP",
+                    value = "${String.format(Locale.US, "%.1f", session.peakCpuTempC)}°C",
+                    sub = "Bat ${String.format(Locale.US, "%.1f", session.peakBatteryTempC)}°C",
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+    }
+}
+
+
+

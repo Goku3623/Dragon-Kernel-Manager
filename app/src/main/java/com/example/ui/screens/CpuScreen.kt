@@ -17,6 +17,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.model.AdrenoCpuBoostConfig
 import com.example.data.model.CpuCluster
 import com.example.data.repository.KernelRepository
 import com.example.ui.theme.DangerRed
@@ -30,6 +31,7 @@ fun CpuScreen(repository: KernelRepository) {
     val coresStatus by repository.coresStatusFlow.collectAsState()
     val cpuTemp by repository.cpuTempFlow.collectAsState()
     val cpuLoad by repository.cpuLoadFlow.collectAsState()
+    val adrenoCpuBoost by repository.adrenoCpuBoostFlow.collectAsState()
 
     LazyColumn(
         modifier = Modifier
@@ -210,6 +212,15 @@ fun CpuScreen(repository: KernelRepository) {
             Spacer(modifier = Modifier.height(16.dp))
         }
 
+        item {
+            // Adreno CPU Boost Section
+            AdrenoCpuBoostCard(
+                config = adrenoCpuBoost,
+                onUpdate = { repository.updateAdrenoCpuBoost(it) }
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
         // Detailed Cluster Freq & Undervolting Controls
         items(cpuClusters.size) { index ->
             val cluster = cpuClusters[index]
@@ -220,6 +231,187 @@ fun CpuScreen(repository: KernelRepository) {
                 onUpdateUndervolt = { offset -> repository.updateClusterUndervolt(cluster.id, offset) }
             )
             Spacer(modifier = Modifier.height(14.dp))
+        }
+    }
+}
+
+@Composable
+fun AdrenoCpuBoostCard(
+    config: AdrenoCpuBoostConfig,
+    onUpdate: (AdrenoCpuBoostConfig) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = CardDefaults.outlinedCardBorder()
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.RocketLaunch, contentDescription = "Adreno CPU Boost", tint = MaterialTheme.colorScheme.primary)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column {
+                        Text("Adreno CPU Boost", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        Text(
+                            "Synchronizes CPU burst clocks with Adreno GPU frame rendering",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Switch(
+                    checked = config.isEnabled,
+                    onCheckedChange = { onUpdate(config.copy(isEnabled = it)) }
+                )
+            }
+
+            if (config.isEnabled) {
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Input / Touch Boost Toggle
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Touch & Input Frame Boost", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                        Text(
+                            "Pre-boosts Silver & Gold clusters on touch events to eliminate frame drops",
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = config.inputBoostEnabled,
+                        onCheckedChange = { onUpdate(config.copy(inputBoostEnabled = it)) }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // GPU Load Threshold Slider
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("GPU Load Trigger Threshold:", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
+                    Text(
+                        ">${config.gpuLoadThresholdPercent}% GPU Load",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                Slider(
+                    value = config.gpuLoadThresholdPercent.toFloat(),
+                    onValueChange = { onUpdate(config.copy(gpuLoadThresholdPercent = it.toInt())) },
+                    valueRange = 30f..90f,
+                    steps = 11
+                )
+
+                // Boost Duration Slider
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Boost Pulse Duration:", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
+                    Text(
+                        "${config.boostDurationMs} ms",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                Slider(
+                    value = config.boostDurationMs.toFloat(),
+                    onValueChange = { onUpdate(config.copy(boostDurationMs = it.toInt())) },
+                    valueRange = 20f..250f,
+                    steps = 22
+                )
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Silver & Gold Cluster Boost Target Frequencies
+                Text(
+                    text = "Silver Cluster Boost Target (Cortex-A520):",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf(1228800, 1497600, 1651200, 1843200).forEach { freqKhz ->
+                        val selected = config.boostFreqSilverKhz == freqKhz
+                        Button(
+                            onClick = { onUpdate(config.copy(boostFreqSilverKhz = freqKhz)) },
+                            modifier = Modifier
+                                .weight(1f)
+                                .defaultMinSize(minHeight = 32.dp),
+                            contentPadding = PaddingValues(2.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
+                            )
+                        ) {
+                            Text(
+                                text = "${freqKhz / 1000} MHz",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (selected) Color.Black else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(
+                    text = "Gold Cluster Boost Target (Cortex-A720):",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf(1555200, 1958400, 2150400, 2496000).forEach { freqKhz ->
+                        val selected = config.boostFreqGoldKhz == freqKhz
+                        Button(
+                            onClick = { onUpdate(config.copy(boostFreqGoldKhz = freqKhz)) },
+                            modifier = Modifier
+                                .weight(1f)
+                                .defaultMinSize(minHeight = 32.dp),
+                            contentPadding = PaddingValues(2.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
+                            )
+                        ) {
+                            Text(
+                                text = "${freqKhz / 1000} MHz",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (selected) Color.Black else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }

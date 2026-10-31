@@ -262,6 +262,188 @@ fun GpuScreen(repository: KernelRepository) {
         }
 
         item {
+            // GPU Boost (AdrenoBoost) Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = CardDefaults.outlinedCardBorder()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.RocketLaunch, contentDescription = "GPU Boost", tint = MaterialTheme.colorScheme.primary)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text("Adreno GPU Boost", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                Text(
+                                    "Accelerates devfreq ramp-up aggressiveness during 3D workloads",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Switch(
+                            checked = gpuConfig.gpuBoostEnabled,
+                            onCheckedChange = { enabled ->
+                                repository.updateGpuBoost(enabled, gpuConfig.gpuBoostLevel)
+                            }
+                        )
+                    }
+
+                    if (gpuConfig.gpuBoostEnabled) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "GPU Boost Intensity Profile (`/sys/class/kgsl/kgsl-3d0/devfreq/adrenoboost`):",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf("LOW", "MEDIUM", "DYNAMIC", "AGGRESSIVE").forEach { level ->
+                                val isSelected = gpuConfig.gpuBoostLevel == level
+                                Button(
+                                    onClick = { repository.updateGpuBoost(true, level) },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .defaultMinSize(minHeight = 36.dp),
+                                    contentPadding = PaddingValues(2.dp),
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (isSelected) {
+                                            if (level == "AGGRESSIVE") DangerRed else MaterialTheme.colorScheme.primary
+                                        } else MaterialTheme.colorScheme.surfaceVariant
+                                    )
+                                ) {
+                                    Text(
+                                        text = level,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (isSelected) Color.Black else MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        item {
+            // GPU Hardware Power Level Card (default_pwrlevel)
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = CardDefaults.outlinedCardBorder()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Speed, contentDescription = "GPU Power Level", tint = MaterialTheme.colorScheme.primary)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text("GPU Power Level (PwrLevel)", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                Text(
+                                    "Configures Qualcomm KGSL hardware power state (`default_pwrlevel`)",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Badge(containerColor = MaterialTheme.colorScheme.primaryContainer) {
+                            Text(
+                                text = "Level ${gpuConfig.powerLevel}",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    val powerLevels = listOf(
+                        Triple(0, "Level 0 • Turbo Peak", "1100 MHz Max Performance State"),
+                        Triple(1, "Level 1 • High Performance", "900 MHz Sustained Gaming State"),
+                        Triple(2, "Level 2 • Balanced", "600 MHz Daily Efficiency State"),
+                        Triple(3, "Level 3 • Power Save", "250 MHz Ultra-Low Power Floor")
+                    )
+
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        powerLevels.forEach { (lvl, title, desc) ->
+                            val isSelected = gpuConfig.powerLevel == lvl
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .border(
+                                        1.dp,
+                                        if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
+                                        RoundedCornerShape(12.dp)
+                                    ),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                                ),
+                                onClick = { repository.updateGpuPowerLevel(lvl) }
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        RadioButton(
+                                            selected = isSelected,
+                                            onClick = { repository.updateGpuPowerLevel(lvl) }
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Column {
+                                            Text(
+                                                text = title,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 13.sp,
+                                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Text(
+                                                text = desc,
+                                                fontSize = 10.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                    Badge(
+                                        containerColor = if (lvl == 0) DangerRed.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surface,
+                                        contentColor = if (lvl == 0) DangerRed else MaterialTheme.colorScheme.onSurface
+                                    ) {
+                                        Text("PWR $lvl", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        item {
             // Custom Voltage Control Sliders (Undervolting)
             Card(
                 modifier = Modifier.fillMaxWidth(),

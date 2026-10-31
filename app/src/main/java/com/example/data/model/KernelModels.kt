@@ -23,6 +23,15 @@ data class CoreDetail(
     val loadPercent: Int
 )
 
+data class AdrenoCpuBoostConfig(
+    val isEnabled: Boolean = true,
+    val boostFreqSilverKhz: Int = 1651200,
+    val boostFreqGoldKhz: Int = 2150400,
+    val boostDurationMs: Int = 80, // Duration in ms
+    val gpuLoadThresholdPercent: Int = 50, // Trigger CPU frequency boost when GPU load exceeds this
+    val inputBoostEnabled: Boolean = true
+)
+
 data class GpuConfig(
     val modelName: String = "Adreno 735",
     val curFreqMhz: Int = 600,
@@ -31,7 +40,9 @@ data class GpuConfig(
     val availableFrequenciesMhz: List<Int> = listOf(250, 450, 600, 750, 900, 1000, 1100),
     val governor: String = "msm-adreno-tz",
     val availableGovernors: List<String> = listOf("msm-adreno-tz", "simple_ondemand", "performance", "powersave"),
-    val powerLevel: Int = 2, // 0 to 5
+    val powerLevel: Int = 0, // 0 = Turbo Peak, 1 = High Perf, 2 = Balanced, 3 = Power Save
+    val gpuBoostEnabled: Boolean = true,
+    val gpuBoostLevel: String = "DYNAMIC", // LOW, MEDIUM, DYNAMIC, AGGRESSIVE
     val throttleTempC: Int = 75,
     val loadPercent: Int = 35,
     val customVoltageOffsets: Map<Int, Int> = mapOf(
@@ -56,7 +67,10 @@ data class BatteryTelemetry(
     val dischargeRateMa: Int = 380,
     val dischargeRatePercentPerHour: Float = 7.6f,
     val remainingCapacityMah: Int = 3900,
+    val learnedFullCapacityMah: Int = 4850,
     val designCapacityMah: Int = 5000,
+    val healthPercent: Int = 97,
+    val healthStatusText: String = "Good",
     val isCharging: Boolean = false,
     val isBypassCharging: Boolean = false,
     val isNightChargingActive: Boolean = false,
@@ -64,7 +78,9 @@ data class BatteryTelemetry(
     val idleDrainPerHour: Float = 1.4f,
     val deepSleepPercent: Float = 88.5f,
     val estimatedMinutesLeft: Int = 420,
-    val health: String = "Good (96% SOH)"
+    val health: String = "Good (97% SOH • 4850/5000 mAh)",
+    val healthAndCycleSource: String = "Android BatteryManager + PowerProfile",
+    val isRootBatteryHealthGranted: Boolean = false
 )
 
 enum class BatteryProfile(
@@ -74,6 +90,13 @@ enum class BatteryProfile(
     val maxCpuFreqPrimeKhz: Int,
     val maxGpuFreqMhz: Int
 ) {
+    DEFAULT(
+        title = "Default (ROM Stock)",
+        description = "Unmodified ROM stock kernel profile with factory schedutil governor and stock clock/thermal policies",
+        thermalLimitC = 42.0f,
+        maxCpuFreqPrimeKhz = 3014400,
+        maxGpuFreqMhz = 950
+    ),
     AUTO(
         title = "Auto Smart",
         description = "Intelligently balances power & thermals based on active foreground workload",
@@ -163,9 +186,17 @@ data class ChargingControls(
     val speedMode: ChargingSpeedMode = ChargingSpeedMode.HYPERCHARGE_90W,
     val bypassCharging: Boolean = false, // Powers device directly, stops battery charge
     val manualCurrentLimiterEnabled: Boolean = false,
-    val manualCurrentLimitMa: Int = 20000, // 500mA - 20000mA (Up to 90 Watt speed!)
+    val manualCurrentLimitMa: Int = 20000, // 1100mA (5W) - 20000mA (90W)
     val bypassThermalLimit: Boolean = false, // Ignores thermal step-down to sustain 90W
-    val nightCharging: NightChargingConfig = NightChargingConfig()
+    val nightCharging: NightChargingConfig = NightChargingConfig(),
+    val romDefaultOverridden: Boolean = false,
+    val lockSysfsNodesReadOnly: Boolean = true, // Locks constant_charge_current_max (chmod 0444) so ROM cannot reset it
+    val overrideRomThermalDaemon: Boolean = true, // Overrides mi_thermald / system_temp_level
+    val forcePmicVoterOverride: Boolean = true, // Forces Qualcomm PMIC FCC & USB_ICL hardware votables
+    val activeOverrideStatus: String = "Standby • ROM Default Charging Active",
+    val lastRootOverrideCommand: String = "/sys/class/power_supply/battery/constant_charge_current_max",
+    val thermalBypassStatus: String = "Standby • ROM Default Thermal Throttling Active",
+    val lastThermalBypassCommand: String = "/sys/class/power_supply/battery/system_temp_level & cooling_device*/cur_state"
 )
 
 data class FpsOverlayConfig(
@@ -173,8 +204,96 @@ data class FpsOverlayConfig(
     val showFps: Boolean = true,
     val showCpuTemp: Boolean = true,
     val showBatTemp: Boolean = true,
-    val showGpuClock: Boolean = true,
-    val showRamUsage: Boolean = true
+    val showGpuClock: Boolean = true
+)
+
+data class FpsRecordedSession(
+    val id: String,
+    val appName: String,
+    val packageName: String,
+    val timestamp: Long,
+    val durationSec: Int,
+    val captureSource: String,
+    val samplingIntervalMs: Int,
+    val avgFps: Float,
+    val minFps: Int,
+    val maxFps: Int,
+    val onePercentLowFps: Int,
+    val pointOnePercentLowFps: Int,
+    val avgFrameTimeMs: Float,
+    val stabilityPercent: Int,
+    val jankFrameCount: Int,
+    val peakCpuTempC: Float,
+    val peakBatteryTempC: Float,
+    val avgGpuLoadPercent: Int,
+    val fpsSamples: List<Int>
+)
+
+data class FpsRecorderConfig(
+    val targetAppName: String = "Global SurfaceFlinger (All Apps)",
+    val targetPackageName: String = "surfaceflinger.global",
+    val captureSource: String = "DRM / Adreno Sysfs", // DRM / Adreno Sysfs, SurfaceFlinger PageFlip, GFXInfo Framestats
+    val samplingIntervalMs: Int = 250, // 100, 250, 500, 1000
+    val durationPresetSec: Int = 0, // 0 = Manual Stop, 60, 180, 300, 600, 900
+    val autoStartOnAppLaunch: Boolean = true,
+    val detectJankSpikes: Boolean = true,
+    val recordThermalsAndPower: Boolean = true,
+    val fpsDropAlertThreshold: Int = 55, // 30 - 115 FPS
+    val elapsedRecordingSec: Int = 0,
+    val currentFrameTimeMs: Float = 8.33f,
+    val liveAvgFps: Float = 120.0f,
+    val liveMinFps: Int = 117,
+    val liveMaxFps: Int = 120,
+    val liveOnePercentLowFps: Int = 116,
+    val livePointOnePercentLowFps: Int = 114,
+    val liveStabilityPercent: Int = 98,
+    val liveJankCount: Int = 0,
+    val liveHardwareSourceStatus: String = "Root DRM / SurfaceFlinger PageFlip",
+    val recordedSessions: List<FpsRecordedSession> = listOf(
+        FpsRecordedSession(
+            id = "fps_session_1",
+            appName = "Genshin Impact",
+            packageName = "com.miHoYo.GenshinImpact",
+            timestamp = System.currentTimeMillis() - 1800_000L,
+            durationSec = 300,
+            captureSource = "DRM / Adreno Sysfs",
+            samplingIntervalMs = 250,
+            avgFps = 118.4f,
+            minFps = 106,
+            maxFps = 120,
+            onePercentLowFps = 111,
+            pointOnePercentLowFps = 107,
+            avgFrameTimeMs = 8.44f,
+            stabilityPercent = 97,
+            jankFrameCount = 3,
+            peakCpuTempC = 41.8f,
+            peakBatteryTempC = 37.5f,
+            avgGpuLoadPercent = 84,
+            fpsSamples = listOf(119, 120, 118, 117, 120, 115, 118, 120, 119, 116, 120, 119, 118, 120, 119, 120)
+        ),
+        FpsRecordedSession(
+            id = "fps_session_2",
+            appName = "Wuthering Waves",
+            packageName = "com.kurogame.wutheringwaves.global",
+            timestamp = System.currentTimeMillis() - 5400_000L,
+            durationSec = 180,
+            captureSource = "SurfaceFlinger PageFlip",
+            samplingIntervalMs = 100,
+            avgFps = 116.8f,
+            minFps = 98,
+            maxFps = 120,
+            onePercentLowFps = 104,
+            pointOnePercentLowFps = 99,
+            avgFrameTimeMs = 8.56f,
+            stabilityPercent = 95,
+            jankFrameCount = 6,
+            peakCpuTempC = 43.1f,
+            peakBatteryTempC = 38.4f,
+            avgGpuLoadPercent = 89,
+            fpsSamples = listOf(118, 117, 115, 120, 112, 116, 118, 119, 114, 117, 120, 116, 115, 118, 119, 117)
+        )
+    ),
+    val lastActionFeedback: String? = null
 )
 
 data class VramConfig(
@@ -187,8 +306,23 @@ data class VramConfig(
     val dirtyRatio: Int = 20, // 10 - 40 %
     val dirtyBackgroundRatio: Int = 10, // 5 - 20 %
     val totalRamMb: Int = 12288,
+    val hardwareRamTierGb: Int = 12,
     val usedRamMb: Int = 5840,
+    val availableRamMb: Int = 6448,
+    val freeRamMb: Int = 1820,
+    val cachedRamMb: Int = 4628,
+    val buffersMb: Int = 184,
+    val anonRamMb: Int = 3920,
+    val slabKernelMb: Int = 640,
+    val gpuVramAllocatedMb: Int = 780,
+    val swapTotalMb: Int = 8192,
     val zramUsedMb: Int = 2140,
+    val zramCompressedRamMb: Int = 760,
+    val zramCompressionRatio: Float = 2.81f,
+    val dirtyMb: Int = 14,
+    val ramHardwareInfo: String = "LPDDR5X • Kernel /proc/meminfo & zram0",
+    val memorySourceStatus: String = "Live /proc/meminfo + ActivityManager",
+    val isRootMemoryAccessGranted: Boolean = false,
     val lastDropCacheFeedback: String? = null
 )
 
@@ -221,3 +355,4 @@ data class AppManagerItem(
     val isAutostartBlocked: Boolean,
     val isSelected: Boolean = false
 )
+

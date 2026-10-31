@@ -52,6 +52,7 @@ fun BatteryScreen(repository: KernelRepository) {
 
     LaunchedEffect(Unit) {
         repository.checkAccessibilityStatus()
+        repository.grantRootAndRefreshBatteryHealth()
     }
 
     var showCreateProfileDialog by remember { mutableStateOf(false) }
@@ -301,14 +302,14 @@ fun BatteryScreen(repository: KernelRepository) {
             ) {
                 Column {
                     Text(
-                        text = "BATTERY & 90W CHARGING CONTROL",
+                        text = "BATTERY & LIVE CHARGING CONTROL",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 1.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        text = "5000 mAh HyperCharge Battery",
+                        text = "${battery.designCapacityMah} mAh Lithium-Polymer Battery",
                         fontSize = 18.sp,
                         fontWeight = FontWeight.ExtraBold,
                         color = MaterialTheme.colorScheme.primary
@@ -320,7 +321,7 @@ fun BatteryScreen(repository: KernelRepository) {
                 ) {
                     Text(
                         text = if (battery.isCharging) {
-                            if (chargingControls.bypassCharging) "BYPASS ACTIVE" else "CHARGING"
+                            if (chargingControls.bypassCharging) "BYPASS ACTIVE" else "CHARGING LIVE"
                         } else "DISCHARGING",
                         fontWeight = FontWeight.Bold,
                         fontSize = 10.sp
@@ -347,7 +348,7 @@ fun BatteryScreen(repository: KernelRepository) {
                 Tab(
                     selected = selectedSubTab == 1,
                     onClick = { selectedSubTab = 1 },
-                    text = { Text("90W Charging", fontWeight = FontWeight.Bold, fontSize = 13.sp) },
+                    text = { Text("Charging", fontWeight = FontWeight.Bold, fontSize = 13.sp) },
                     icon = { Icon(Icons.Default.FlashOn, contentDescription = "Charging", modifier = Modifier.size(18.dp)) }
                 )
             }
@@ -375,12 +376,69 @@ fun BatteryScreen(repository: KernelRepository) {
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text("Real-Time Battery Telemetry", fontWeight = FontWeight.Bold, fontSize = 15.sp)
                             }
-                            Text(
-                                text = "${battery.health}",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = SuccessGreen
-                            )
+                            Badge(
+                                containerColor = if (battery.healthPercent >= 85) SuccessGreen.copy(alpha = 0.2f) else WarningOrange.copy(alpha = 0.2f),
+                                contentColor = if (battery.healthPercent >= 85) SuccessGreen else WarningOrange
+                            ) {
+                                Text(
+                                    text = "${battery.healthStatusText} (${battery.healthPercent}% SOH)",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Root BMS/FG Battery Health & Cycle Count Source Banner
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(
+                                    if (battery.isRootBatteryHealthGranted) SuccessGreen.copy(alpha = 0.12f)
+                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+                                )
+                                .border(
+                                    1.dp,
+                                    if (battery.isRootBatteryHealthGranted) SuccessGreen.copy(alpha = 0.55f)
+                                    else MaterialTheme.colorScheme.outline.copy(alpha = 0.25f),
+                                    RoundedCornerShape(12.dp)
+                                )
+                                .padding(10.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    modifier = Modifier.weight(1f),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = if (battery.isRootBatteryHealthGranted) Icons.Default.VerifiedUser else Icons.Default.Info,
+                                        contentDescription = null,
+                                        tint = if (battery.isRootBatteryHealthGranted) SuccessGreen else MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Column {
+                                        Text(
+                                            text = battery.healthAndCycleSource,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (battery.isRootBatteryHealthGranted) SuccessGreen else MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Text(
+                                            text = "Actual Health: ${battery.healthPercent}% SOH (${battery.learnedFullCapacityMah}/${battery.designCapacityMah} mAh) • Actual Cycles: ${battery.chargeCycles}",
+                                            fontSize = 9.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
                         }
 
                         Spacer(modifier = Modifier.height(14.dp))
@@ -400,7 +458,7 @@ fun BatteryScreen(repository: KernelRepository) {
                                     color = MaterialTheme.colorScheme.primary
                                 )
                                 Text(
-                                    text = "${battery.voltageMv} mV • ${battery.remainingCapacityMah} mAh",
+                                    text = "${battery.voltageMv} mV • ${battery.remainingCapacityMah} / ${battery.learnedFullCapacityMah} mAh",
                                     fontSize = 11.sp,
                                     fontFamily = FontFamily.Monospace,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -409,22 +467,23 @@ fun BatteryScreen(repository: KernelRepository) {
                             Column(horizontalAlignment = Alignment.End) {
                                 Text(
                                     text = if (battery.isCharging) {
-                                        String.format(Locale.US, "+%.1f W HyperCharge", battery.chargeSpeedWatts)
+                                        String.format(Locale.US, "+%.2f W", battery.chargeSpeedWatts)
                                     } else {
                                         "Discharge: ${battery.dischargeRateMa} mA"
                                     },
-                                    fontSize = 13.sp,
+                                    fontSize = 15.sp,
                                     fontWeight = FontWeight.Bold,
                                     fontFamily = FontFamily.Monospace,
                                     color = if (battery.isCharging) SuccessGreen else MaterialTheme.colorScheme.onSurface
                                 )
                                 Text(
                                     text = if (battery.isCharging) {
-                                        if (battery.isBypassCharging) "Bypass: Direct Board Power" else "Fast Charging Active"
+                                        if (battery.isBypassCharging) "0 mA (Bypass Active)" else "+${battery.currentMa} mA @ ${String.format(Locale.US, "%.2f V", battery.voltageMv / 1000f)}"
                                     } else {
                                         String.format(Locale.US, "Drain: %.1f%%/h", battery.dischargeRatePercentPerHour)
                                     },
                                     fontSize = 11.sp,
+                                    fontFamily = FontFamily.Monospace,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
@@ -452,7 +511,7 @@ fun BatteryScreen(repository: KernelRepository) {
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Column {
                                     Text(
-                                        text = "LIVE CHARGING / TELEMETRY RATE",
+                                        text = if (battery.isCharging) "LIVE CHARGING SPEED & RATE (/sys/class/power_supply/)" else "LIVE DISCHARGE TELEMETRY RATE",
                                         fontSize = 10.sp,
                                         fontWeight = FontWeight.Bold,
                                         letterSpacing = 0.5.sp,
@@ -469,7 +528,7 @@ fun BatteryScreen(repository: KernelRepository) {
                             }
                             Badge(containerColor = if (battery.isCharging) SuccessGreen else MaterialTheme.colorScheme.primaryContainer) {
                                 Text(
-                                    text = if (battery.isCharging) "90W HYPERCHARGE" else "ACTIVE",
+                                    text = if (battery.isCharging) "CHARGING LIVE" else "DISCHARGING",
                                     fontSize = 9.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = if (battery.isCharging) Color.Black else MaterialTheme.colorScheme.primary
@@ -491,11 +550,23 @@ fun BatteryScreen(repository: KernelRepository) {
 
                         Spacer(modifier = Modifier.height(14.dp))
 
-                        // Grid of detailed stats
+                        // Grid of detailed stats (Actual Health, Learned Capacity, Cycle Count)
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            BatteryDetailItem("Remaining Cap.", "${battery.remainingCapacityMah} mAh", "Design 5000 mAh")
-                            BatteryDetailItem("Battery Temp", String.format(Locale.US, "%.1f°C", battery.temperatureC), "Limit: ${activeCustomProfile?.thermalLimitC?.toInt() ?: activeProfile.thermalLimitC.toInt()}°C")
-                            BatteryDetailItem("Cycle Count", "${battery.chargeCycles}", "Good condition")
+                            BatteryDetailItem(
+                                "Battery Health",
+                                "${battery.healthPercent}% SOH",
+                                "${battery.learnedFullCapacityMah} / ${battery.designCapacityMah} mAh"
+                            )
+                            BatteryDetailItem(
+                                "Cycle Count",
+                                "${battery.chargeCycles} Cycles",
+                                "Status: ${battery.healthStatusText}"
+                            )
+                            BatteryDetailItem(
+                                "Remaining Cap.",
+                                "${battery.remainingCapacityMah} mAh",
+                                "Design ${battery.designCapacityMah} mAh"
+                            )
                         }
 
                         Spacer(modifier = Modifier.height(12.dp))
@@ -504,8 +575,33 @@ fun BatteryScreen(repository: KernelRepository) {
 
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             BatteryDetailItem("Real Current", "${battery.currentMa} mA", if (battery.isCharging) "Charging In" else "Discharging")
-                            BatteryDetailItem("Live Voltage", "${battery.voltageMv} mV", "Li-Po 4.45V peak")
+                            BatteryDetailItem("Live Voltage", "${battery.voltageMv} mV", "Temp: ${String.format(Locale.US, "%.1f°C", battery.temperatureC)}")
                             BatteryDetailItem("Deep Sleep Ratio", String.format(Locale.US, "%.0f%%", battery.deepSleepPercent), "Power efficient")
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Button(
+                            onClick = { repository.grantRootAndRefreshBatteryHealth() },
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (battery.isRootBatteryHealthGranted) SuccessGreen else MaterialTheme.colorScheme.primary
+                            )
+                        ) {
+                            Icon(
+                                Icons.Default.AdminPanelSettings,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = if (battery.isRootBatteryHealthGranted) Color.Black else MaterialTheme.colorScheme.onPrimary
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Grant Root Permissions & Refresh Actual Battery Health / Cycles",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (battery.isRootBatteryHealthGranted) Color.Black else MaterialTheme.colorScheme.onPrimary
+                            )
                         }
                     }
                 }
@@ -776,9 +872,9 @@ fun BatteryScreen(repository: KernelRepository) {
                 }
             }
         } else {
-            // SUB-TAB 1: 90W CHARGING SECTION
+            // SUB-TAB 1: LIVE CHARGING SECTION
             item {
-                // Root Telemetry Permission Card
+                // Live /sys/class/power_supply/ Charging Speed & Charging Rate Card (Root)
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(18.dp),
@@ -792,16 +888,16 @@ fun BatteryScreen(repository: KernelRepository) {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Security, contentDescription = "Root", tint = MaterialTheme.colorScheme.primary)
+                                Icon(Icons.Default.Bolt, contentDescription = "Live Charging", tint = if (battery.isCharging) SuccessGreen else MaterialTheme.colorScheme.primary)
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("Real-Time Charging Telemetry (Root)", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                Text("Live Charging Speed & Rate (Root)", fontWeight = FontWeight.Bold, fontSize = 15.sp)
                             }
                             Badge(
                                 containerColor = if (isRootGranted) SuccessGreen.copy(alpha = 0.2f) else WarningOrange.copy(alpha = 0.2f),
                                 contentColor = if (isRootGranted) SuccessGreen else WarningOrange
                             ) {
                                 Text(
-                                    text = if (isRootGranted) "ROOT ACTIVE" else "TAP TO GRANT",
+                                    text = if (isRootGranted) "ROOT SYSFS ACTIVE" else "TAP TO GRANT ROOT",
                                     fontSize = 9.sp,
                                     fontWeight = FontWeight.Bold
                                 )
@@ -809,22 +905,133 @@ fun BatteryScreen(repository: KernelRepository) {
                         }
 
                         Text(
-                            text = "Access kernel sysfs power supply nodes (`/sys/class/power_supply/battery/current_now`) to monitor exact real-time charging wattage and milliamps directly from Qualcomm hardware.",
+                            text = "Reads real-time live charging speed (W) and charging rate (mA / V) directly from `/sys/class/power_supply/battery/current_now` and `/sys/class/power_supply/battery/voltage_now` when the device is in charging state.",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(vertical = 4.dp)
                         )
 
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Live Charging Telemetry Display Box
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(
+                                    if (battery.isCharging) SuccessGreen.copy(alpha = 0.12f)
+                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+                                )
+                                .border(
+                                    1.dp,
+                                    if (battery.isCharging) SuccessGreen.copy(alpha = 0.6f)
+                                    else MaterialTheme.colorScheme.outline.copy(alpha = 0.25f),
+                                    RoundedCornerShape(14.dp)
+                                )
+                                .padding(14.dp)
+                        ) {
+                            Column {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = if (battery.isCharging) "DEVICE CHARGING STATE: LIVE" else "DEVICE STATE: NOT CHARGING (DISCHARGING)",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        letterSpacing = 0.6.sp,
+                                        color = if (battery.isCharging) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = "/sys/class/power_supply/battery",
+                                        fontSize = 9.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.height(10.dp))
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column {
+                                        Text(
+                                            text = "LIVE CHARGING SPEED",
+                                            fontSize = 10.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Text(
+                                            text = if (battery.isCharging) {
+                                                String.format(Locale.US, "+%.2f W", battery.chargeSpeedWatts)
+                                            } else {
+                                                "0.00 W (Not Charging)"
+                                            },
+                                            fontSize = 24.sp,
+                                            fontWeight = FontWeight.Black,
+                                            fontFamily = FontFamily.Monospace,
+                                            color = if (battery.isCharging) SuccessGreen else MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+
+                                    Column(horizontalAlignment = Alignment.End) {
+                                        Text(
+                                            text = if (battery.isCharging) "LIVE CHARGING RATE" else "LIVE DISCHARGE RATE",
+                                            fontSize = 10.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Text(
+                                            text = if (battery.isCharging) {
+                                                "+${battery.currentMa} mA"
+                                            } else {
+                                                "-${battery.dischargeRateMa} mA"
+                                            },
+                                            fontSize = 22.sp,
+                                            fontWeight = FontWeight.Black,
+                                            fontFamily = FontFamily.Monospace,
+                                            color = if (battery.isCharging) SuccessGreen else MaterialTheme.colorScheme.primary
+                                        )
+                                        Text(
+                                            text = String.format(Locale.US, "@ %.2f V (%d mV)", battery.voltageMv / 1000f, battery.voltageMv),
+                                            fontSize = 11.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(8.dp))
+                                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                Text(
+                                    text = "Live Telemetry: ${battery.chargeRateFormatted}",
+                                    fontSize = 11.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = if (battery.isCharging) SuccessGreen else MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
 
                         Button(
                             onClick = { repository.requestRootForChargingSpeed() },
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Icon(Icons.Default.Security, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text(if (isRootGranted) "Verify Root Charging Access" else "Grant Root Permission for Real-Time Charging Speed", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text(
+                                if (isRootGranted) "Refresh /sys/class/power_supply/ Root Telemetry"
+                                else "Grant Root Permission for /sys/class/power_supply/ Charging Telemetry",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
                     }
                 }
@@ -832,7 +1039,26 @@ fun BatteryScreen(repository: KernelRepository) {
             }
 
             item {
-                // Charging Speed Selection Card (Max 90W)
+                // Custom Current Limiter Card (Lowest: 1,100 mA to Max: 20,000 mA)
+                val clampedMa = chargingControls.manualCurrentLimitMa.coerceIn(1100, 20000)
+                val isOverridingRom = chargingControls.manualCurrentLimiterEnabled
+                val actualLiveChargingSpeedText = if (battery.isCharging) {
+                    String.format(
+                        Locale.US,
+                        "+%.2f W (+%d mA @ %.2f V)",
+                        battery.chargeSpeedWatts,
+                        battery.currentMa,
+                        battery.voltageMv / 1000f
+                    )
+                } else {
+                    String.format(
+                        Locale.US,
+                        "0.00 W (Discharging %d mA @ %.2f V)",
+                        battery.currentMa,
+                        battery.voltageMv / 1000f
+                    )
+                }
+
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(18.dp),
@@ -842,82 +1068,321 @@ fun BatteryScreen(repository: KernelRepository) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Bolt, contentDescription = "Speed", tint = MaterialTheme.colorScheme.primary)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Charging Speed Modes (Max 90W)", fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                            }
-                        }
-
-                        Text(
-                            text = "Select hardware charging speed profile. POCO F6 officially supports up to 90 Watt HyperCharge.",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(vertical = 4.dp)
-                        )
-
-                        Spacer(modifier = Modifier.height(10.dp))
-
-                        ChargingSpeedMode.values().forEach { mode ->
-                            val isSelected = (chargingControls.speedMode == mode)
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 4.dp)
-                                    .border(
-                                        1.dp,
-                                        if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
-                                        RoundedCornerShape(12.dp)
-                                    )
-                                    .clickable { repository.setChargingSpeedMode(mode) },
-                                colors = CardDefaults.cardColors(
-                                    containerColor = if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
-                                    else MaterialTheme.colorScheme.surfaceVariant
-                                )
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(12.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
+                                Icon(
+                                    Icons.Default.Tune,
+                                    contentDescription = "Custom Current Limiter",
+                                    tint = if (isOverridingRom) SuccessGreen else MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        RadioButton(
-                                            selected = isSelected,
-                                            onClick = { repository.setChargingSpeedMode(mode) }
-                                        )
+                                        Text("Custom Current Limiter", fontWeight = FontWeight.Bold, fontSize = 15.sp)
                                         Spacer(modifier = Modifier.width(6.dp))
-                                        Column {
+                                        Badge(
+                                            containerColor = if (isOverridingRom) SuccessGreen.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant,
+                                            contentColor = if (isOverridingRom) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant
+                                        ) {
                                             Text(
-                                                text = mode.label,
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 14.sp,
-                                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                                            )
-                                            Text(
-                                                text = "Current limit: ${mode.maxCurrentMa} mA",
-                                                fontSize = 11.sp,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                text = if (isOverridingRom) "ROM OVERRIDDEN" else "STANDBY",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold
                                             )
                                         }
                                     }
-
-                                    Badge(
-                                        containerColor = if (mode == ChargingSpeedMode.HYPERCHARGE_90W) DangerRed.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surface,
-                                        contentColor = if (mode == ChargingSpeedMode.HYPERCHARGE_90W) DangerRed else MaterialTheme.colorScheme.onSurface
-                                    ) {
-                                        Text(
-                                            text = "${mode.maxWattage}W",
-                                            fontWeight = FontWeight.Black,
-                                            fontSize = 12.sp
-                                        )
-                                    }
+                                    Text(
+                                        "Overrides ROM default current ceiling via Root (`constant_charge_current_max` & PMIC FCC)",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                 }
                             }
+                            Switch(
+                                checked = isOverridingRom,
+                                onCheckedChange = { isEnabled ->
+                                    repository.setManualCurrentLimiter(isEnabled, clampedMa)
+                                }
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Actual Live Device Charging Speed Readout (Hardware Measured, Never Limiter Target)
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(
+                                    if (battery.isCharging) SuccessGreen.copy(alpha = 0.14f)
+                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                                )
+                                .border(
+                                    1.dp,
+                                    if (battery.isCharging) SuccessGreen.copy(alpha = 0.65f)
+                                    else MaterialTheme.colorScheme.outline.copy(alpha = 0.25f),
+                                    RoundedCornerShape(12.dp)
+                                )
+                                .padding(10.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text(
+                                        text = "ACTUAL DEVICE CHARGING SPEED (LIVE PMIC)",
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (battery.isCharging) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = actualLiveChargingSpeedText,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = if (battery.isCharging) SuccessGreen else MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                                Badge(
+                                    containerColor = MaterialTheme.colorScheme.surface,
+                                    contentColor = MaterialTheme.colorScheme.primary
+                                ) {
+                                    Text(
+                                        text = "REAL HARDWARE",
+                                        fontSize = 8.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // ROM Default Override Status Box
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(
+                                    if (isOverridingRom) SuccessGreen.copy(alpha = 0.12f)
+                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+                                )
+                                .border(
+                                    1.dp,
+                                    if (isOverridingRom) SuccessGreen.copy(alpha = 0.6f)
+                                    else MaterialTheme.colorScheme.outline.copy(alpha = 0.25f),
+                                    RoundedCornerShape(12.dp)
+                                )
+                                .padding(10.dp)
+                        ) {
+                            Column {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            imageVector = if (isOverridingRom) Icons.Default.VerifiedUser else Icons.Default.Info,
+                                            contentDescription = null,
+                                            tint = if (isOverridingRom) SuccessGreen else MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = if (isOverridingRom) "ROM DEFAULT CHARGING OVERRIDDEN BY ROOT" else "ROM DEFAULT CHARGING SPEED ACTIVE",
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (isOverridingRom) SuccessGreen else MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+                                    Text(
+                                        text = if (chargingControls.lockSysfsNodesReadOnly) "chmod 0444 LOCKED" else "chmod 0666",
+                                        fontSize = 9.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = chargingControls.activeOverrideStatus,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = chargingControls.lastRootOverrideCommand,
+                                    fontSize = 9.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Selected Current Ceiling:", fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                            Badge(
+                                containerColor = if (clampedMa >= 17500) DangerRed.copy(alpha = 0.2f)
+                                else if (clampedMa <= 3500) SuccessGreen.copy(alpha = 0.2f)
+                                else MaterialTheme.colorScheme.primaryContainer,
+                                contentColor = if (clampedMa >= 17500) DangerRed
+                                else if (clampedMa <= 3500) SuccessGreen
+                                else MaterialTheme.colorScheme.primary
+                            ) {
+                                Text(
+                                    text = "$clampedMa mA Ceiling",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        }
+
+                        Slider(
+                            value = clampedMa.toFloat(),
+                            onValueChange = { newVal ->
+                                // Snap to 100 mA increments between 1100 mA and 20000 mA and auto-enable override
+                                val steppedMa = ((newVal / 100f).toInt() * 100).coerceIn(1100, 20000)
+                                repository.setManualCurrentLimiter(true, steppedMa)
+                            },
+                            valueRange = 1100f..20000f
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("1,100 mA (Min)", fontSize = 9.sp, fontWeight = FontWeight.SemiBold, color = SuccessGreen)
+                            Text("7,300 mA", fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("14,900 mA", fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("20,000 mA (Max)", fontSize = 9.sp, fontWeight = FontWeight.SemiBold, color = DangerRed)
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Quick current ceiling presets in mA
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf(
+                                1100 to "1.1A",
+                                4000 to "4.0A",
+                                7300 to "7.3A",
+                                14900 to "14.9A",
+                                20000 to "20.0A"
+                            ).forEach { (presetMa, label) ->
+                                val isSelected = isOverridingRom && kotlin.math.abs(clampedMa - presetMa) < 150
+                                Button(
+                                    onClick = { repository.setManualCurrentLimiter(true, presetMa) },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .defaultMinSize(minHeight = 34.dp),
+                                    contentPadding = PaddingValues(2.dp),
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (isSelected) {
+                                            if (presetMa == 20000) DangerRed else MaterialTheme.colorScheme.primary
+                                        } else MaterialTheme.colorScheme.surfaceVariant
+                                    )
+                                ) {
+                                    Text(
+                                        text = label,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (isSelected) Color.Black else MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Text(
+                            text = "Root ROM Override Protection Flags",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            FilterChip(
+                                selected = chargingControls.lockSysfsNodesReadOnly,
+                                onClick = {
+                                    repository.updateCurrentLimiterProtectionFlags(
+                                        lockReadOnly = !chargingControls.lockSysfsNodesReadOnly
+                                    )
+                                },
+                                label = { Text("chmod 0444 Lock", fontSize = 10.sp) },
+                                modifier = Modifier.weight(1f)
+                            )
+                            FilterChip(
+                                selected = chargingControls.overrideRomThermalDaemon,
+                                onClick = {
+                                    repository.updateCurrentLimiterProtectionFlags(
+                                        overrideThermalDaemon = !chargingControls.overrideRomThermalDaemon
+                                    )
+                                },
+                                label = { Text("Block mi_thermald", fontSize = 10.sp) },
+                                modifier = Modifier.weight(1f)
+                            )
+                            FilterChip(
+                                selected = chargingControls.forcePmicVoterOverride,
+                                onClick = {
+                                    repository.updateCurrentLimiterProtectionFlags(
+                                        forcePmicVoter = !chargingControls.forcePmicVoterOverride
+                                    )
+                                },
+                                label = { Text("PMIC FCC Vote", fontSize = 10.sp) },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Button(
+                            onClick = { repository.forceRootOverrideCurrentLimiter() },
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isOverridingRom) SuccessGreen else MaterialTheme.colorScheme.primary
+                            )
+                        ) {
+                            Icon(
+                                Icons.Default.AdminPanelSettings,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = if (isOverridingRom) Color.Black else MaterialTheme.colorScheme.onPrimary
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Grant Root Permissions & Force Override ROM Default (${clampedMa} mA)",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isOverridingRom) Color.Black else MaterialTheme.colorScheme.onPrimary
+                            )
                         }
                     }
                 }
@@ -996,7 +1461,8 @@ fun BatteryScreen(repository: KernelRepository) {
             }
 
             item {
-                // Manual Current Limiter Card (Max up to 20,000 mA / 90W speed)
+                // Bypass Thermal Limit for Charging Card (Root Enforced)
+                val isThermalBypassActive = chargingControls.bypassThermalLimit
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(18.dp),
@@ -1009,119 +1475,136 @@ fun BatteryScreen(repository: KernelRepository) {
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Tune, contentDescription = "Current Limiter", tint = MaterialTheme.colorScheme.primary)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Manual Current Limiter (Up to 90W)", fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                            }
-                            Switch(
-                                checked = chargingControls.manualCurrentLimiterEnabled,
-                                onCheckedChange = { isEnabled ->
-                                    repository.setManualCurrentLimiter(isEnabled, chargingControls.manualCurrentLimitMa)
-                                }
-                            )
-                        }
-
-                        Text(
-                            text = "Clamp maximum charging current from 500 mA up to 20,000 mA (90 Watt HyperCharge maximum speed).",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(vertical = 4.dp)
-                        )
-
-                        if (chargingControls.manualCurrentLimiterEnabled) {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            val approxWatts = (chargingControls.manualCurrentLimitMa * 4.45f / 1000f).toInt()
                             Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text("Selected Limit:", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
-                                Text(
-                                    "${chargingControls.manualCurrentLimitMa} mA (~${approxWatts}W Speed)",
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    fontFamily = FontFamily.Monospace,
-                                    color = if (approxWatts >= 80) DangerRed else MaterialTheme.colorScheme.primary
-                                )
-                            }
-                            Slider(
-                                value = chargingControls.manualCurrentLimitMa.toFloat(),
-                                onValueChange = { newVal ->
-                                    repository.setManualCurrentLimiter(true, newVal.toInt())
-                                },
-                                valueRange = 500f..20000f,
-                                steps = 38
-                            )
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text("500 mA (Slow)", fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text("7,500 mA (33W)", fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text("20,000 mA (90W Speed)", fontSize = 9.sp, color = DangerRed)
-                            }
-                        }
-                    }
-                }
-                Spacer(modifier = Modifier.height(16.dp))
-            }
-
-            item {
-                // Bypass Thermal Limit for Charging Card
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(18.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    border = CardDefaults.outlinedCardBorder()
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Default.Whatshot, contentDescription = "Thermal Bypass", tint = DangerRed)
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("Bypass Thermal Charging Limit", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                Column {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text("Bypass Thermal Charging Limit", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Badge(
+                                            containerColor = if (isThermalBypassActive) WarningOrange.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant,
+                                            contentColor = if (isThermalBypassActive) WarningOrange else MaterialTheme.colorScheme.onSurfaceVariant
+                                        ) {
+                                            Text(
+                                                text = if (isThermalBypassActive) "ROOT BYPASS ACTIVE" else "STANDBY",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        "Disables ROM `mi_thermald` & kernel `system_temp_level` / `cooling_device` charging throttle via Root",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
                             Switch(
-                                checked = chargingControls.bypassThermalLimit,
+                                checked = isThermalBypassActive,
                                 onCheckedChange = { repository.toggleBypassThermalLimit(it) }
                             )
                         }
 
-                        Spacer(modifier = Modifier.height(6.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
 
                         Text(
-                            text = "Overrides Xiaomi MIUI/HyperOS default thermal charging throttling. Keeps 90W fast charging active even as battery temperature warms up above 40°C.",
+                            text = "Grants root permissions and locks `system_temp_level=0`, `charge_control_limit=0`, `thermal_limit_bypass=1`, `sconfig=20`, and all battery/charger `cooling_device*/cur_state=0` with `chmod 0444` so Xiaomi HyperOS/MIUI cannot throttle charging speed when battery temperature rises.",
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             lineHeight = 16.sp
                         )
 
-                        if (chargingControls.bypassThermalLimit) {
-                            Spacer(modifier = Modifier.height(10.dp))
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(WarningOrange.copy(alpha = 0.15f))
-                                    .border(1.dp, WarningOrange, RoundedCornerShape(10.dp))
-                                    .padding(10.dp)
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Warning, contentDescription = "Warning", tint = WarningOrange, modifier = Modifier.size(18.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(
+                                    if (isThermalBypassActive) WarningOrange.copy(alpha = 0.14f)
+                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+                                )
+                                .border(
+                                    1.dp,
+                                    if (isThermalBypassActive) WarningOrange.copy(alpha = 0.65f)
+                                    else MaterialTheme.colorScheme.outline.copy(alpha = 0.25f),
+                                    RoundedCornerShape(12.dp)
+                                )
+                                .padding(10.dp)
+                        ) {
+                            Column {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            imageVector = if (isThermalBypassActive) Icons.Default.Warning else Icons.Default.Info,
+                                            contentDescription = null,
+                                            tint = if (isThermalBypassActive) WarningOrange else MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = if (isThermalBypassActive) "THERMAL THROTTLING BYPASSED BY ROOT" else "STOCK ROM THERMAL THROTTLING ACTIVE",
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (isThermalBypassActive) WarningOrange else MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
                                     Text(
-                                        text = "Thermal Throttling Bypassed • Monitor temps with persistent notification",
-                                        fontSize = 11.sp,
+                                        text = if (isThermalBypassActive) "chmod 0444 LOCKED" else "chmod 0666",
+                                        fontSize = 9.sp,
+                                        fontFamily = FontFamily.Monospace,
                                         fontWeight = FontWeight.Bold,
-                                        color = WarningOrange
+                                        color = if (isThermalBypassActive) WarningOrange else MaterialTheme.colorScheme.primary
                                     )
                                 }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = chargingControls.thermalBypassStatus,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = chargingControls.lastThermalBypassCommand,
+                                    fontSize = 9.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Button(
+                            onClick = { repository.forceRootBypassThermalLimit() },
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isThermalBypassActive) WarningOrange else DangerRed
+                            )
+                        ) {
+                            Icon(
+                                Icons.Default.AdminPanelSettings,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = if (isThermalBypassActive) Color.Black else Color.White
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Grant Root & Force Bypass Thermal Charging Limit",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isThermalBypassActive) Color.Black else Color.White
+                            )
                         }
                     }
                 }

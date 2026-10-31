@@ -273,9 +273,9 @@ fun DashboardScreen(
                         onClick = { onNavigateToTab(2) }
                     )
                     TelemetryMiniCard(
-                        title = if (battery.isCharging) "CHARGE SPEED" else "DISCHARGE RATE",
-                        value = if (battery.isCharging) String.format(Locale.US, "%.1f W", battery.chargeSpeedWatts) else "${battery.dischargeRateMa} mA",
-                        subtitle = if (battery.isCharging) "90W HyperCharge" else String.format(Locale.US, "%.1f%%/hr", battery.dischargeRatePercentPerHour),
+                        title = if (battery.isCharging) "LIVE CHARGE SPEED" else "DISCHARGE RATE",
+                        value = if (battery.isCharging) String.format(Locale.US, "+%.2f W", battery.chargeSpeedWatts) else "${battery.dischargeRateMa} mA",
+                        subtitle = if (battery.isCharging) "+${battery.currentMa} mA • ${String.format(Locale.US, "%.2f V", battery.voltageMv / 1000f)}" else String.format(Locale.US, "%.1f%%/hr", battery.dischargeRatePercentPerHour),
                         icon = if (battery.isCharging) Icons.Default.FlashOn else Icons.Default.South,
                         accentColor = if (battery.isCharging) SuccessGreen else MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.weight(1f),
@@ -381,8 +381,8 @@ fun DashboardScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        DrainStatItem("Battery Level", "${battery.levelPercent}%", SuccessGreen)
-                        DrainStatItem("Capacity", "${battery.remainingCapacityMah} / 5000 mAh", MaterialTheme.colorScheme.onSurface)
+                        DrainStatItem("Health (SOH)", "${battery.healthPercent}% (${battery.healthStatusText})", SuccessGreen)
+                        DrainStatItem("Full / Design", "${battery.learnedFullCapacityMah} / ${battery.designCapacityMah}", MaterialTheme.colorScheme.onSurface)
                         DrainStatItem("Cycles", "${battery.chargeCycles}", MaterialTheme.colorScheme.onSurface)
                         DrainStatItem("Deep Sleep", String.format(Locale.US, "%.0f%%", battery.deepSleepPercent), MaterialTheme.colorScheme.primary)
                     }
@@ -414,7 +414,7 @@ fun DashboardScreen(
         }
 
         item {
-            // Quick Tools & Overlay Toggles
+            // Quick Utilities Card (Floating Hardware HUD Overlay removed from Dashboard)
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -425,7 +425,7 @@ fun DashboardScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "QUICK UTILITIES & FLOATING OVERLAY",
+                        text = "QUICK UTILITIES & BACKGROUND TELEMETRY",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 1.sp,
@@ -440,44 +440,9 @@ fun DashboardScreen(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("Floating Hardware HUD Overlay", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                            Text(
-                                "Live FPS, CPU/GPU clock, and thermal meters over games & apps",
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Switch(
-                            checked = fpsOverlayConfig.isEnabled,
-                            onCheckedChange = { isChecked ->
-                                if (isChecked && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(context)) {
-                                    val intent = Intent(
-                                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                        Uri.parse("package:${context.packageName}")
-                                    )
-                                    context.startActivity(intent)
-                                } else {
-                                    repository.updateFpsOverlayConfig(fpsOverlayConfig.copy(isEnabled = isChecked))
-                                    val serviceIntent = Intent(context, FloatingOverlayService::class.java)
-                                    if (isChecked) context.startService(serviceIntent) else context.stopService(serviceIntent)
-                                }
-                            }
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-                    HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
                             Text("Persistent Status Bar Telemetry", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                             Text(
-                                "Monitors 90W charge speed, temps, drain rate, & profile pop-up",
+                                "Monitors live charging speed, temps, drain rate, & profile pop-up",
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
