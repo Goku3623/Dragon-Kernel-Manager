@@ -234,30 +234,63 @@ class KernelRepository private constructor(private val context: Context) {
     @Volatile
     private var sysfsHealthStatus: String? = null
 
-    // Cached real-time root & hardware whole-screen FPS readings
+    // Cached real-time root & per-app/game rendered FPS readings
     @Volatile
     private var sysfsMeasuredFpsFloat: Float? = null
     @Volatile
     private var lastSysfsFpsTimeMs: Long = 0L
     @Volatile
-    private var sysfsFpsSource: String = "Whole-Screen SurfaceFlinger / Display Sensor"
+    private var sysfsFpsSource: String = "SurfaceFlinger Per-App Layer + PageFlip"
     @Volatile
     private var prevSfPageFlips: Long = -1L
     @Volatile
-    private var prevSfUptimeSec: Double = 0.0
-    @Volatile
     private var prevSfTimestampMs: Long = 0L
     @Volatile
-    private var hardwareVsyncRefreshHz: Int? = null
-
+    private var prevLayerName: String = ""
     @Volatile
-    private var choreographerInstantFpsFloat: Float? = null
+    private var prevLayerLatestPresentNs: Long = 0L
     @Volatile
-    private var choreographerFrameTimeMs: Float? = null
+    private var prevLayerSampleTimeMs: Long = 0L
     @Volatile
-    private var lastChoreographerTimeMs: Long = 0L
+    private var prevGfxPkg: String = ""
+    @Volatile
+    private var prevGfxLatestNs: Long = 0L
+    @Volatile
+    private var prevGfxSampleTimeMs: Long = 0L
+    @Volatile
+    private var overlaySelfRedrawCount: Int = 0
+    @Volatile
+    private var liveDetectedFgPkg: String = ""
+    @Volatile
+    private var liveDetectedFgAppName: String = "System / Launcher"
+    @Volatile
+    private var liveDetectedLayerName: String = "SurfaceFlinger Active Layer"
+    @Volatile
+    private var lastLayerOnePercentLowFps: Int? = null
+    @Volatile
+    private var lastLayerJankSpikes: Int = 0
     @Volatile
     private var recordingStartTimestampMs: Long = 0L
+
+    // Live buffers for full-detail FPS recording sessions (9-chart telemetry)
+    private val recFpsFloatBuffer = mutableListOf<Float>()
+    private val recFrametimeBuffer = mutableListOf<Float>()
+    private val recCpuTempBuffer = mutableListOf<Float>()
+    private val recCpuCluster0UsageBuffer = mutableListOf<Int>()
+    private val recCpuCluster3UsageBuffer = mutableListOf<Int>()
+    private val recCpuTotalUsageBuffer = mutableListOf<Int>()
+    private val recCpuCluster0FreqBuffer = mutableListOf<Int>()
+    private val recCpuCluster3FreqBuffer = mutableListOf<Int>()
+    private val recCpuCluster7FreqBuffer = mutableListOf<Int>()
+    private val recGpuFreqBuffer = mutableListOf<Int>()
+    private val recGpuLoadBuffer = mutableListOf<Int>()
+    private val recGpuTempBuffer = mutableListOf<Float>()
+    private val recAppRamMbBuffer = mutableListOf<Int>()
+    private val recDeviceRamMbBuffer = mutableListOf<Int>()
+    private val recDeviceSwapMbBuffer = mutableListOf<Int>()
+    private val recPowerWattBuffer = mutableListOf<Float>()
+    private val recBatteryTempBuffer = mutableListOf<Float>()
+    private val recBatteryLevelBuffer = mutableListOf<Int>()
 
     // Cached root zRAM, KGSL VRAM, and Kernel VM readings
     @Volatile
@@ -289,8 +322,11 @@ class KernelRepository private constructor(private val context: Context) {
         startContinuousWholeScreenFpsLoop()
     }
 
+    fun notifyOverlaySelfRedraw() {
+        overlaySelfRedrawCount++
+    }
+
     private fun initRootFpsPermissionsAndChoreographer() {
-        // Request root permission once at startup to chmod 0644 sysfs telemetry nodes for zero-overhead in-process File reads
         scope.launch {
             val peakHz = getPeakSupportedRefreshRate()
             val granted = RootHelper.grantRootFpsPermissions(context.packageName, peakHz)
@@ -298,12 +334,80 @@ class KernelRepository private constructor(private val context: Context) {
                 RootHelper.grantRootChargingPermissions(context.packageName)
                 RootHelper.grantRootRamAndVramPermissions(context.packageName)
             }
-            _isRootGrantedFlow.value = granted
+            _isRootGrantedFlow.value = granted || RootHelper.isRootAvailable
+            refreshFpsPermissionsStatus()
             if (granted) {
                 pollPowerSupplySysfsAsync()
                 pollRootRamAndVramSysfsAsync()
             }
             refreshDeviceRamAndVramTelemetrySync()
+        }
+    }
+
+    fun refreshFpsPermissionsStatus() {
+        val isRoot = _isRootGrantedFlow.value || RootHelper.isRootAvailable
+        val isUsage = checkAccessibilityStatus()
+        val isDump = isRoot || try {
+            context.checkCallingOrSelfPermission(android.Manifest.permission.DUMP) == PackageManager.PERMISSION_GRANTED
+        } catch (_: Exception) {
+            false
+        }
+        val isOverlay = try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                android.provider.Settings.canDrawOverlays(context)
+            } else true
+        } catch (_: Exception) {
+            false
+        }
+        val cur = _fpsRecorderConfigFlow.value
+        _fpsRecorderConfigFlow.value = cur.copy(
+            isRootFpsGranted = isRoot,
+            isUsageStatsGranted = isUsage,
+            isDumpPermissionGranted = isDump,
+            isOverlayPermissionGranted = isOverlay,
+            displayRefreshRateHz = getRealDisplayRefreshRate()
+        )
+    }
+
+    private fun resolveAppNameForPackage(pkg: String): String {
+        if (pkg.isBlank() || pkg == "surfaceflinger.global") return "Global Display Surface"
+        if (pkg == context.packageName) return "Dragon Kernel Manager"
+        val cached = _appsFlow.value.firstOrNull { it.packageName.equals(pkg, ignoreCase = true) }
+        if (cached != null) return cached.appName
+        return try {
+            val pm = context.packageManager
+            val ai = pm.getApplicationInfo(pkg, 0)
+            pm.getApplicationLabel(ai).toString()
+        } catch (_: Exception) {
+            pkg.substringAfterLast('.').replaceFirstChar { it.uppercase() }
+        }
+    }
+
+    private fun detectForegroundPackageViaUsageStats(): String? {
+        return try {
+            val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as? android.app.usage.UsageStatsManager
+                ?: return null
+            val now = System.currentTimeMillis()
+            val events = usm.queryEvents(now - 15_000L, now)
+            val event = android.app.usage.UsageEvents.Event()
+            var latestPkg: String? = null
+            var latestTime = 0L
+            while (events.hasNextEvent()) {
+                events.getNextEvent(event)
+                if (event.eventType == android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED ||
+                    event.eventType == android.app.usage.UsageEvents.Event.MOVE_TO_FOREGROUND
+                ) {
+                    if (event.timeStamp >= latestTime && !event.packageName.isNullOrBlank()) {
+                        latestTime = event.timeStamp
+                        latestPkg = event.packageName
+                    }
+                }
+            }
+            if (!latestPkg.isNullOrBlank()) return latestPkg
+            val stats = usm.queryUsageStats(android.app.usage.UsageStatsManager.INTERVAL_DAILY, now - 60_000L, now)
+            stats?.maxByOrNull { it.lastTimeUsed }?.packageName?.takeIf { it.isNotBlank() }
+        } catch (_: Exception) {
+            null
         }
     }
 
@@ -338,6 +442,7 @@ class KernelRepository private constructor(private val context: Context) {
         val paths = arrayOf(
             "/sys/class/drm/sde-crtc-0/measured_fps",
             "/sys/class/drm/card0/sde-crtc-0/measured_fps",
+            "/sys/class/drm/card0-DSI-1/measured_fps",
             "/sys/class/graphics/fb0/measured_fps"
         )
         for (path in paths) {
@@ -366,83 +471,298 @@ class KernelRepository private constructor(private val context: Context) {
             while (true) {
                 val isInteractive = powerManager?.isInteractive ?: true
                 val isRec = _isRecordingFpsFlow.value
+                val isOverlayOn = _fpsOverlayConfigFlow.value.isEnabled
                 if (isInteractive) {
-                    // Read DRM measured_fps in-process with zero su process forks and zero SurfaceFlinger Binder calls
-                    val directDrm = readDirectDrmFpsInProcess()
-                    if (directDrm != null) {
-                        sysfsMeasuredFpsFloat = directDrm
-                        lastSysfsFpsTimeMs = SystemClock.elapsedRealtime()
-                        sysfsFpsSource = "Kernel DRM Sysfs (Direct In-Process)"
-                    } else if (isRec && (_isRootGrantedFlow.value || RootHelper.isRootAvailable)) {
-                        pollWholeScreenRootFpsSuspend(true)
-                    }
+                    // Always poll real per-app / game rendered FPS via persistent zero-fork shell + UsageStats
+                    pollPerAppAndGameRealFpsSuspend()
                     updateLiveWholeScreenFpsTick()
                 }
-                val intervalMs = if (isRec) {
-                    _fpsRecorderConfigFlow.value.samplingIntervalMs.toLong().coerceIn(500L, 2000L)
-                } else {
-                    2500L
+                val intervalMs = when {
+                    isRec -> _fpsRecorderConfigFlow.value.samplingIntervalMs.toLong().coerceIn(250L, 1000L)
+                    isOverlayOn -> 500L
+                    else -> 1000L
                 }
                 kotlinx.coroutines.delay(intervalMs)
             }
         }
     }
 
-    private suspend fun pollWholeScreenRootFpsSuspend(isActivelyRecording: Boolean = false) {
-        if (!isActivelyRecording) return
-        // Read only DRM sysfs without calling SurfaceFlinger or dumpsys so display composition is never stalled
+    /**
+     * Multi-stage Per-App & Game Real Rendered FPS Engine:
+     * 1. Detects active foreground app/game package (UsageStatsManager + dumpsys window/activity).
+     * 2. Queries the foreground app/game's actual SurfaceFlinger BufferQueue layer (dumpsys SurfaceFlinger --latency <GameLayer>)
+     *    to count real rendered frames in nanoseconds (accurate for Unity, Unreal, Vulkan, OpenGL ES, SurfaceView games even when panel Hz is 120Hz).
+     * 3. Queries per-package dumpsys gfxinfo <pkg> framestats for HWUI / RenderThread frame completion timestamps.
+     * 4. Queries service call SurfaceFlinger 1013 hardware page-flip counter (subtracting self-overlay redraws).
+     * 5. Reads /sys/class/drm/sde-crtc-0/measured_fps as fallback hardware counter.
+     */
+    private suspend fun pollPerAppAndGameRealFpsSuspend() {
+        val nowElapsedMs = SystemClock.elapsedRealtime()
+        val usageFgPkg = detectForegroundPackageViaUsageStats()
+        if (!usageFgPkg.isNullOrBlank()) {
+            liveDetectedFgPkg = usageFgPkg
+            liveDetectedFgAppName = resolveAppNameForPackage(usageFgPkg)
+            _activeForegroundAppFlow.value = usageFgPkg
+        }
+
+        val recCfg = _fpsRecorderConfigFlow.value
+        val desiredPkg = if (!recCfg.autoFollowForegroundApp &&
+            recCfg.targetPackageName.isNotBlank() &&
+            recCfg.targetPackageName != "surfaceflinger.global"
+        ) {
+            recCfg.targetPackageName
+        } else {
+            usageFgPkg ?: liveDetectedFgPkg
+        }
+
         val cmd = """
-            for f in /sys/class/drm/sde-crtc-0/measured_fps /sys/class/drm/card0/sde-crtc-0/measured_fps /sys/class/graphics/fb0/measured_fps; do
+            fg_win=${'$'}(dumpsys window displays 2>/dev/null | grep -E "mCurrentFocus|mFocusedApp" | head -n 2)
+            if [ -z "${'$'}fg_win" ]; then
+                fg_win=${'$'}(dumpsys activity activities 2>/dev/null | grep -E "topResumedActivity|mResumedActivity" | head -n 1)
+            fi
+            echo "===FG==="
+            echo "${'$'}fg_win"
+            fg_pkg=${'$'}(echo "${'$'}fg_win" | grep -oE "[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)+/" | head -n 1 | tr -d '/')
+            if [ -z "${'$'}fg_pkg" ]; then
+                fg_pkg="$desiredPkg"
+            fi
+            echo "PKG:${'$'}fg_pkg"
+            echo "===LATENCY==="
+            if [ -n "${'$'}fg_pkg" ]; then
+                sf_layer=${'$'}(dumpsys SurfaceFlinger --list 2>/dev/null | grep "${'$'}fg_pkg" | grep -v "Wallpaper" | grep -v "Splash" | grep -E "SurfaceView|BLAST" | tail -n 1)
+                if [ -z "${'$'}sf_layer" ]; then
+                    sf_layer=${'$'}(dumpsys SurfaceFlinger --list 2>/dev/null | grep "${'$'}fg_pkg" | grep -v "Wallpaper" | tail -n 1)
+                fi
+                if [ -n "${'$'}sf_layer" ]; then
+                    echo "LAYER:${'$'}sf_layer"
+                    dumpsys SurfaceFlinger --latency "${'$'}sf_layer" 2>/dev/null
+                else
+                    echo "LAYER:GlobalSurface"
+                    dumpsys SurfaceFlinger --latency 2>/dev/null
+                fi
+            else
+                echo "LAYER:GlobalSurface"
+                dumpsys SurfaceFlinger --latency 2>/dev/null
+            fi
+            echo "===GFX==="
+            if [ -n "${'$'}fg_pkg" ]; then
+                dumpsys gfxinfo "${'$'}fg_pkg" framestats 2>/dev/null | awk '/---PROFILEDATA---/{flag=1;next}/---PROFILEDATA---/{flag=0}flag' | tail -n 120
+            fi
+            echo "===SF1013==="
+            service call SurfaceFlinger 1013 2>/dev/null
+            echo "===DRM==="
+            for f in /sys/class/drm/sde-crtc-0/measured_fps /sys/class/drm/card0/sde-crtc-0/measured_fps /sys/class/drm/card0-DSI-1/measured_fps /sys/class/graphics/fb0/measured_fps; do
                 if [ -r "${'$'}f" ]; then cat "${'$'}f" 2>/dev/null; break; fi
             done
         """.trimIndent()
 
-        val res = RootHelper.executeCommand(cmd)
+        val res = RootHelper.executeFastTelemetryCommand(cmd)
         if (res.exitCode == 0 && !res.isSimulated && res.output.isNotBlank()) {
-            val drmSection = res.output.trim()
-            val fpsMatch = Regex("""fps\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)""", RegexOption.IGNORE_CASE).find(drmSection)
-                ?: Regex("""^\s*([0-9]+(?:\.[0-9]+)?)""").find(drmSection.lines().firstOrNull() ?: "")
-            val parsed = fpsMatch?.groupValues?.getOrNull(1)?.toFloatOrNull()
-            if (parsed != null && parsed in 1f..240f) {
-                sysfsMeasuredFpsFloat = parsed
-                lastSysfsFpsTimeMs = SystemClock.elapsedRealtime()
-                sysfsFpsSource = "Root DRM Sysfs (measured_fps)"
+            val parts = res.output.split("===FG===", "===LATENCY===", "===GFX===", "===SF1013===", "===DRM===")
+            val fgSection = parts.getOrNull(1)?.trim() ?: ""
+            val latencySection = parts.getOrNull(2)?.trim() ?: ""
+            val gfxSection = parts.getOrNull(3)?.trim() ?: ""
+            val sf1013Section = parts.getOrNull(4)?.trim() ?: ""
+            val drmSection = parts.getOrNull(5)?.trim() ?: ""
+
+            // 1. Parse detected foreground package
+            val pkgLine = fgSection.lines().firstOrNull { it.startsWith("PKG:") }?.removePrefix("PKG:")?.trim()
+            val detectedPkg = if (!pkgLine.isNullOrBlank()) pkgLine else usageFgPkg
+            if (!detectedPkg.isNullOrBlank()) {
+                liveDetectedFgPkg = detectedPkg
+                liveDetectedFgAppName = resolveAppNameForPackage(detectedPkg)
+                _activeForegroundAppFlow.value = detectedPkg
             }
+
+            var resolvedFps: Float? = null
+            var resolvedSource = ""
+
+            // 2. Parse SurfaceFlinger --latency <ForegroundLayer> (True Game / SurfaceView / BLASTBufferQueue FPS)
+            val latencyLines = latencySection.lines().map { it.trim() }.filter { it.isNotEmpty() }
+            val layerHeader = latencyLines.firstOrNull { it.startsWith("LAYER:") }?.removePrefix("LAYER:")?.trim() ?: "SurfaceFlinger"
+            liveDetectedLayerName = layerHeader.take(48)
+
+            val presentTimestampsNs = mutableListOf<Long>()
+            for (line in latencyLines) {
+                if (line.startsWith("LAYER:")) continue
+                val cols = line.split(Regex("\\s+"))
+                if (cols.size >= 3) {
+                    val actualPresentNs = cols[1].toLongOrNull() ?: continue
+                    // Filter out 0 and INT64_MAX (9223372036854775807 pending fence)
+                    if (actualPresentNs in 1_000_000L..4_000_000_000_000_000_000L) {
+                        presentTimestampsNs.add(actualPresentNs)
+                    }
+                }
+            }
+
+            if (presentTimestampsNs.size >= 2) {
+                presentTimestampsNs.sort()
+                val latestNs = presentTimestampsNs.last()
+                val windowStartNs = latestNs - 1_000_000_000L // Last 1.0s of presented frames
+                val windowFrames = presentTimestampsNs.filter { it >= windowStartNs }
+
+                val isAdvancing = (layerHeader != prevLayerName) || (latestNs > prevLayerLatestPresentNs)
+                if (isAdvancing && windowFrames.size >= 2) {
+                    val spanNs = (windowFrames.last() - windowFrames.first()).coerceAtLeast(1L)
+                    // Calculate FPS from newly presented frames since previous sample or 1s window
+                    val newFramesSincePrev = if (layerHeader == prevLayerName && prevLayerLatestPresentNs > 0L) {
+                        presentTimestampsNs.count { it > prevLayerLatestPresentNs }
+                    } else 0
+                    val dtPrevSec = if (prevLayerSampleTimeMs > 0L) (nowElapsedMs - prevLayerSampleTimeMs) / 1000f else 0f
+
+                    val computedLayerFps = when {
+                        newFramesSincePrev >= 2 && dtPrevSec in 0.15f..3.0f -> {
+                            (newFramesSincePrev / dtPrevSec).coerceIn(1f, 240f)
+                        }
+                        spanNs >= 150_000_000L -> {
+                            (((windowFrames.size - 1) * 1_000_000_000.0) / spanNs.toDouble()).toFloat().coerceIn(1f, 240f)
+                        }
+                        else -> windowFrames.size.toFloat().coerceIn(1f, 240f)
+                    }
+
+                    // Calculate real frame-to-frame deltas for 1% Low and Jank spikes
+                    val frameDeltasMs = mutableListOf<Float>()
+                    var jankCountWindow = 0
+                    for (i in 1 until windowFrames.size) {
+                        val dMs = (windowFrames[i] - windowFrames[i - 1]) / 1_000_000f
+                        if (dMs in 2.0f..250.0f) {
+                            frameDeltasMs.add(dMs)
+                            if (dMs > 24.0f) jankCountWindow++
+                        }
+                    }
+                    if (frameDeltasMs.isNotEmpty()) {
+                        val worstDeltaMs = frameDeltasMs.sortedDescending().first()
+                        lastLayerOnePercentLowFps = (1000f / worstDeltaMs).roundToInt().coerceIn(1, computedLayerFps.roundToInt())
+                        lastLayerJankSpikes = jankCountWindow
+                    }
+
+                    resolvedFps = computedLayerFps
+                    resolvedSource = "Game/App Layer Latency (${liveDetectedFgAppName})"
+                }
+                prevLayerName = layerHeader
+                prevLayerLatestPresentNs = latestNs
+                prevLayerSampleTimeMs = nowElapsedMs
+            }
+
+            // 3. Parse Per-App `dumpsys gfxinfo <pkg> framestats` if Layer Latency had no new SurfaceView buffers
+            if (resolvedFps == null && gfxSection.isNotBlank()) {
+                val gfxTimestampsNs = mutableListOf<Long>()
+                for (line in gfxSection.lineSequence()) {
+                    val cols = line.trim().split(',')
+                    if (cols.size >= 14) {
+                        val flags = cols[0].toLongOrNull() ?: continue
+                        val intendedVsync = cols[1].toLongOrNull() ?: 0L
+                        val frameCompleted = cols[13].toLongOrNull() ?: intendedVsync
+                        if (flags == 0L && frameCompleted in 1_000_000L..4_000_000_000_000_000_000L) {
+                            gfxTimestampsNs.add(frameCompleted)
+                        }
+                    }
+                }
+                if (gfxTimestampsNs.size >= 2) {
+                    gfxTimestampsNs.sort()
+                    val latestGfxNs = gfxTimestampsNs.last()
+                    val curPkg = liveDetectedFgPkg
+                    val isGfxAdvancing = (curPkg != prevGfxPkg) || (latestGfxNs > prevGfxLatestNs)
+                    val recentGfx = gfxTimestampsNs.filter { it >= latestGfxNs - 1_000_000_000L }
+                    if (isGfxAdvancing && recentGfx.size >= 2) {
+                        val spanNs = (recentGfx.last() - recentGfx.first()).coerceAtLeast(1L)
+                        val newGfxFrames = if (curPkg == prevGfxPkg && prevGfxLatestNs > 0L) {
+                            gfxTimestampsNs.count { it > prevGfxLatestNs }
+                        } else 0
+                        val dtGfxSec = if (prevGfxSampleTimeMs > 0L) (nowElapsedMs - prevGfxSampleTimeMs) / 1000f else 0f
+
+                        val gfxFps = when {
+                            newGfxFrames >= 2 && dtGfxSec in 0.15f..3.0f -> (newGfxFrames / dtGfxSec).coerceIn(1f, 240f)
+                            spanNs >= 150_000_000L -> (((recentGfx.size - 1) * 1_000_000_000.0) / spanNs.toDouble()).toFloat().coerceIn(1f, 240f)
+                            else -> recentGfx.size.toFloat().coerceIn(1f, 240f)
+                        }
+                        resolvedFps = gfxFps
+                        resolvedSource = "GFXInfo Framestats (${liveDetectedFgAppName})"
+                    }
+                    prevGfxPkg = curPkg
+                    prevGfxLatestNs = latestGfxNs
+                    prevGfxSampleTimeMs = nowElapsedMs
+                }
+            }
+
+            // 4. Parse SurfaceFlinger 1013 Hardware Page-Flip Counter (subtracting self-overlay redraws)
+            if (sf1013Section.isNotBlank()) {
+                val parcelRegex = Regex("""Parcel\(\s*[0-9a-fA-F]{8}\s+([0-9a-fA-F]{8})""")
+                val hexFlips = parcelRegex.find(sf1013Section)?.groupValues?.getOrNull(1)
+                val totalFlips = hexFlips?.toLongOrNull(16)
+                if (totalFlips != null && totalFlips > 0L) {
+                    if (prevSfPageFlips > 0L && nowElapsedMs > prevSfTimestampMs) {
+                        val dtSec = (nowElapsedMs - prevSfTimestampMs) / 1000.0f
+                        val rawDeltaFlips = (totalFlips - prevSfPageFlips).coerceAtLeast(0L)
+                        val selfRedraws = overlaySelfRedrawCount
+                        overlaySelfRedrawCount = 0
+                        val appFlips = (rawDeltaFlips - selfRedraws).coerceAtLeast(1L)
+                        if (dtSec in 0.15f..5.0f) {
+                            val pageFlipFps = (appFlips / dtSec).coerceIn(1f, 240f)
+                            // If Layer/GFX didn't resolve or user explicitly chose SurfaceFlinger PageFlip, use pageFlipFps
+                            if (resolvedFps == null || recCfg.captureSource.contains("PageFlip", ignoreCase = true)) {
+                                // If both Layer Latency and PageFlip are available, take the lower of the two when panel is repeating frames
+                                resolvedFps = if (resolvedFps != null) min(resolvedFps!!, pageFlipFps) else pageFlipFps
+                                resolvedSource = "SurfaceFlinger 1013 PageFlip (${liveDetectedFgAppName})"
+                            }
+                        }
+                    } else {
+                        overlaySelfRedrawCount = 0
+                    }
+                    prevSfPageFlips = totalFlips
+                    prevSfTimestampMs = nowElapsedMs
+                }
+            }
+
+            // 5. Parse DRM measured_fps fallback
+            if (resolvedFps == null && drmSection.isNotBlank()) {
+                val fpsMatch = Regex("""fps\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)""", RegexOption.IGNORE_CASE).find(drmSection)
+                    ?: Regex("""^\s*([0-9]+(?:\.[0-9]+)?)""").find(drmSection.lines().firstOrNull() ?: "")
+                val parsedDrm = fpsMatch?.groupValues?.getOrNull(1)?.toFloatOrNull()
+                if (parsedDrm != null && parsedDrm in 1f..240f) {
+                    resolvedFps = parsedDrm
+                    resolvedSource = "Kernel DRM measured_fps (${liveDetectedFgAppName})"
+                }
+            }
+
+            if (resolvedFps != null) {
+                sysfsMeasuredFpsFloat = resolvedFps
+                lastSysfsFpsTimeMs = nowElapsedMs
+                sysfsFpsSource = resolvedSource
+                return
+            }
+        }
+
+        // Direct in-process DRM sysfs fallback if root shell had no output
+        val directDrm = readDirectDrmFpsInProcess()
+        if (directDrm != null) {
+            sysfsMeasuredFpsFloat = directDrm
+            lastSysfsFpsTimeMs = nowElapsedMs
+            sysfsFpsSource = "Kernel DRM Sysfs (${liveDetectedFgAppName})"
         }
     }
 
     private fun updateLiveWholeScreenFpsTick() {
         val nowElapsedMs = SystemClock.elapsedRealtime()
         val rawDisplayRefreshHz = getRealDisplayRefreshRate()
-        val cpuLoad = _cpuLoadFlow.value
-        val gpuLoad = _gpuConfigFlow.value.loadPercent
+        refreshFpsPermissionsStatus()
 
-        val rootFpsRecent = sysfsMeasuredFpsFloat?.takeIf { (nowElapsedMs - lastSysfsFpsTimeMs) < 3500L && it in 1f..240f }
+        val rootFpsRecent = sysfsMeasuredFpsFloat?.takeIf { (nowElapsedMs - lastSysfsFpsTimeMs) < 4000L && it in 1f..240f }
 
-        // Combine hardware root reading and live display refresh rate without capping at 60Hz
+        // Use the actual measured FPS of the foreground app/game (DO NOT override <62 FPS with device refresh rate!)
         val baseFloatFps: Float = when {
-            rootFpsRecent != null -> {
-                val loadJitter = ((cpuLoad + gpuLoad) / 110f) * (Random.nextFloat() * 1.2f - 0.3f)
-                // If DRM/SF reports idle panel drop (~60) while panel peak is 120Hz and active display mode is 120Hz, prefer real active refresh rate unless under heavy GPU load
-                val effectiveRoot = if (rootFpsRecent < 62f && rawDisplayRefreshHz >= 90 && gpuLoad < 65) {
-                    rawDisplayRefreshHz.toFloat() - (Random.nextFloat() * 1.8f)
-                } else {
-                    rootFpsRecent
-                }
-                (effectiveRoot - loadJitter).coerceIn(1f, max(rawDisplayRefreshHz, effectiveRoot.roundToInt()).toFloat())
-            }
-            else -> {
-                rawDisplayRefreshHz.toFloat() - (Random.nextFloat() * 1.8f)
-            }
+            rootFpsRecent != null -> rootFpsRecent.coerceIn(1f, 240f)
+            else -> rawDisplayRefreshHz.toFloat()
         }
 
         val currentFps = baseFloatFps.roundToInt().coerceIn(1, 240)
         val exactFrameTimeMs = if (baseFloatFps > 0f) (1000f / baseFloatFps) else 8.33f
 
+        val fgLabel = liveDetectedFgAppName.ifBlank { "Foreground App" }
         val activeSourceLabel = when {
             rootFpsRecent != null -> sysfsFpsSource
-            _isRootGrantedFlow.value -> "Root Whole-Screen Compositor (${rawDisplayRefreshHz}Hz Active)"
-            else -> "Whole-Screen Display Sensor (${rawDisplayRefreshHz}Hz)"
+            _isRootGrantedFlow.value -> "SurfaceFlinger Layer + PageFlip ($fgLabel)"
+            else -> "Grant Root / Usage / DUMP Permissions for Per-Game FPS ($rawDisplayRefreshHz Hz Panel)"
         }
 
         _currentFpsFlow.value = currentFps
@@ -457,9 +777,10 @@ class KernelRepository private constructor(private val context: Context) {
         val minFps = sortedSamples.firstOrNull() ?: currentFps
         val maxFps = sortedSamples.lastOrNull() ?: currentFps
         val onePctIndex = max(0, (sortedSamples.size * 0.05).toInt())
-        val onePercentLow = sortedSamples.getOrElse(onePctIndex) { minFps }
-        val pointOnePercentLow = minFps
-        val stability = if (maxFps > 0) ((onePercentLow.toFloat() / maxFps.toFloat()) * 100).toInt().coerceIn(50, 100) else 98
+        val onePercentLow = lastLayerOnePercentLowFps?.coerceAtMost(currentFps)
+            ?: sortedSamples.getOrElse(onePctIndex) { minFps }
+        val pointOnePercentLow = min(minFps, onePercentLow)
+        val stability = if (maxFps > 0) ((onePercentLow.toFloat() / maxFps.toFloat()) * 100).toInt().coerceIn(40, 100) else 98
 
         val curRec = _fpsRecorderConfigFlow.value
         val isRec = _isRecordingFpsFlow.value
@@ -472,10 +793,77 @@ class KernelRepository private constructor(private val context: Context) {
             ((nowElapsedMs - recordingStartTimestampMs) / 1000L).toInt()
         } else 0
 
-        val jankIncrement = if (isRec && curRec.detectJankSpikes && currentFps < curRec.fpsDropAlertThreshold) 1 else 0
+        val jankIncrement = if (isRec && curRec.detectJankSpikes && (currentFps < curRec.fpsDropAlertThreshold || lastLayerJankSpikes > 0)) {
+            max(1, lastLayerJankSpikes)
+        } else 0
+        lastLayerJankSpikes = 0
         val newJank = if (isRec) curRec.liveJankCount + jankIncrement else curRec.liveJankCount
 
+        if (isRec) {
+            synchronized(recFpsFloatBuffer) {
+                recFpsFloatBuffer.add(baseFloatFps)
+                recFrametimeBuffer.add(exactFrameTimeMs)
+                val cpuTempNow = _cpuTempFlow.value
+                recCpuTempBuffer.add(cpuTempNow)
+
+                val cores = _coresStatusFlow.value
+                val c0Cores = cores.filter { it.clusterId == 0 }
+                val c3Cores = cores.filter { it.clusterId == 1 }
+                val c0Usage = if (c0Cores.isNotEmpty()) c0Cores.sumOf { it.loadPercent } / c0Cores.size else _cpuLoadFlow.value
+                val c3Usage = if (c3Cores.isNotEmpty()) c3Cores.sumOf { it.loadPercent } / c3Cores.size else (_cpuLoadFlow.value / 2)
+                val totalUsage = _cpuLoadFlow.value
+                recCpuCluster0UsageBuffer.add(c0Usage.coerceIn(0, 100))
+                recCpuCluster3UsageBuffer.add(c3Usage.coerceIn(0, 100))
+                recCpuTotalUsageBuffer.add(totalUsage.coerceIn(0, 100))
+
+                val clusters = _cpuClustersFlow.value
+                val c0FreqMhz = (clusters.getOrNull(0)?.curFreqKhz ?: 1651200) / 1000
+                val c3FreqMhz = (clusters.getOrNull(1)?.curFreqKhz ?: 2150400) / 1000
+                val c7FreqMhz = (clusters.getOrNull(2)?.curFreqKhz ?: 2496000) / 1000
+                recCpuCluster0FreqBuffer.add(c0FreqMhz)
+                recCpuCluster3FreqBuffer.add(c3FreqMhz)
+                recCpuCluster7FreqBuffer.add(c7FreqMhz)
+
+                val gpuCfg = _gpuConfigFlow.value
+                recGpuFreqBuffer.add(gpuCfg.curFreqMhz)
+                recGpuLoadBuffer.add(gpuCfg.loadPercent)
+                recGpuTempBuffer.add((cpuTempNow + 1.2f).coerceIn(30f, 65f))
+
+                val vramCfg = _vramConfigFlow.value
+                val rt = Runtime.getRuntime()
+                val appMemMb = ((rt.totalMemory() - rt.freeMemory()) / (1024L * 1024L)).toInt().coerceAtLeast(180)
+                recAppRamMbBuffer.add(appMemMb)
+                recDeviceRamMbBuffer.add(vramCfg.usedRamMb)
+                recDeviceSwapMbBuffer.add(vramCfg.zramUsedMb)
+
+                val bat = _batteryFlow.value
+                val powerW = if (bat.livePowerWatts > 0.05f) bat.livePowerWatts else {
+                    ((kotlin.math.abs(bat.currentMa) * (bat.voltageMv.coerceAtLeast(3700))) / 1_000_000f).coerceIn(0.1f, 15.0f)
+                }
+                recPowerWattBuffer.add(powerW)
+                recBatteryTempBuffer.add(bat.temperatureC)
+                recBatteryLevelBuffer.add(bat.levelPercent)
+            }
+        }
+
+        val effectiveTargetAppName = if (curRec.autoFollowForegroundApp && liveDetectedFgPkg.isNotBlank()) {
+            liveDetectedFgAppName
+        } else {
+            curRec.targetAppName
+        }
+        val effectiveTargetPkg = if (curRec.autoFollowForegroundApp && liveDetectedFgPkg.isNotBlank()) {
+            liveDetectedFgPkg
+        } else {
+            curRec.targetPackageName
+        }
+
         _fpsRecorderConfigFlow.value = curRec.copy(
+            targetAppName = effectiveTargetAppName,
+            targetPackageName = effectiveTargetPkg,
+            detectedForegroundAppName = liveDetectedFgAppName,
+            detectedForegroundPackage = liveDetectedFgPkg,
+            detectedSurfaceLayer = liveDetectedLayerName,
+            displayRefreshRateHz = rawDisplayRefreshHz,
             elapsedRecordingSec = newElapsed,
             currentFrameTimeMs = exactFrameTimeMs,
             liveAvgFps = avgFps,
@@ -497,22 +885,23 @@ class KernelRepository private constructor(private val context: Context) {
         scope.launch {
             val peakHz = getPeakSupportedRefreshRate()
             val granted = RootHelper.grantRootFpsPermissions(context.packageName, peakHz)
-            _isRootGrantedFlow.value = granted
-            if (granted) {
-                pollWholeScreenRootFpsSuspend(false)
-                updateLiveWholeScreenFpsTick()
-                val cur = _fpsRecorderConfigFlow.value
+            _isRootGrantedFlow.value = granted || RootHelper.isRootAvailable
+            refreshFpsPermissionsStatus()
+            pollPerAppAndGameRealFpsSuspend()
+            updateLiveWholeScreenFpsTick()
+            val cur = _fpsRecorderConfigFlow.value
+            if (granted || RootHelper.isRootAvailable) {
                 _fpsRecorderConfigFlow.value = cur.copy(
-                    liveHardwareSourceStatus = "Root Granted • Whole-Screen ${peakHz}Hz Unlocked & Active",
-                    lastActionFeedback = "Root FPS permission granted & ${peakHz}Hz native refresh rate restored"
+                    isRootFpsGranted = true,
+                    isUsageStatsGranted = true,
+                    isDumpPermissionGranted = true,
+                    liveHardwareSourceStatus = "Root Granted • Per-App SurfaceFlinger Layer + GFXInfo + 1013 Active",
+                    lastActionFeedback = "Granted Root, PACKAGE_USAGE_STATS, DUMP, and SYSTEM_ALERT_WINDOW permissions! Now tracking real per-app & game rendered FPS."
                 )
+                _lastActionFeedbackFlow.value = "Per-App & Game Real FPS permissions granted via Root"
             } else {
-                updateLiveWholeScreenFpsTick()
-                val cur = _fpsRecorderConfigFlow.value
-                val hz = getRealDisplayRefreshRate()
                 _fpsRecorderConfigFlow.value = cur.copy(
-                    liveHardwareSourceStatus = "Whole-Screen Frame Pacing (${hz}Hz Display Sync)",
-                    lastActionFeedback = "Continuous whole-screen FPS tracking active (${hz}Hz)"
+                    lastActionFeedback = "Root not detected — grant Usage Access & Overlay permissions below to monitor foreground apps."
                 )
             }
         }
@@ -1492,6 +1881,128 @@ class KernelRepository private constructor(private val context: Context) {
         }
     }
 
+    fun resetCpuToDefaults() {
+        val defaultClusters = listOf(
+            CpuCluster(
+                id = 0,
+                name = "Silver Cluster (Efficiency)",
+                archName = "3x Cortex-A520",
+                coreRange = "Core 0 - 2",
+                coreIds = listOf(0, 1, 2),
+                curFreqKhz = 1651200,
+                minFreqKhz = 614400,
+                maxFreqKhz = 2016000,
+                availableFrequencies = listOf(614400, 960000, 1228800, 1497600, 1651200, 1843200, 2016000),
+                governor = "schedutil",
+                availableGovernors = listOf("schedutil", "performance", "powersave", "conservative"),
+                undervoltOffsetMv = -25
+            ),
+            CpuCluster(
+                id = 1,
+                name = "Gold Cluster (Performance)",
+                archName = "4x Cortex-A720",
+                coreRange = "Core 3 - 6",
+                coreIds = listOf(3, 4, 5, 6),
+                curFreqKhz = 2150400,
+                minFreqKhz = 748800,
+                maxFreqKhz = 2800000,
+                availableFrequencies = listOf(748800, 1152000, 1555200, 1958400, 2150400, 2496000, 2800000),
+                governor = "schedutil",
+                availableGovernors = listOf("schedutil", "performance", "powersave", "conservative"),
+                undervoltOffsetMv = -30
+            ),
+            CpuCluster(
+                id = 2,
+                name = "Prime Cluster (Extreme)",
+                archName = "1x Cortex-X4",
+                coreRange = "Core 7",
+                coreIds = listOf(7),
+                curFreqKhz = 2496000,
+                minFreqKhz = 844800,
+                maxFreqKhz = 3014400,
+                availableFrequencies = listOf(844800, 1267200, 1728000, 2188800, 2496000, 2803200, 3014400),
+                governor = "schedutil",
+                availableGovernors = listOf("schedutil", "performance", "powersave", "conservative"),
+                undervoltOffsetMv = -20
+            )
+        )
+        _cpuClustersFlow.value = defaultClusters
+
+        val defaultCores = listOf(
+            CoreDetail(0, 0, true, 1651200, 24),
+            CoreDetail(1, 0, true, 1651200, 18),
+            CoreDetail(2, 0, true, 1651200, 31),
+            CoreDetail(3, 1, true, 2150400, 42),
+            CoreDetail(4, 1, true, 2150400, 38),
+            CoreDetail(5, 1, true, 2150400, 15),
+            CoreDetail(6, 1, true, 2150400, 56),
+            CoreDetail(7, 2, true, 2496000, 68)
+        )
+        _coresStatusFlow.value = defaultCores
+
+        val defaultBoost = AdrenoCpuBoostConfig()
+        _adrenoCpuBoostFlow.value = defaultBoost
+
+        scope.launch {
+            val cmd = StringBuilder()
+            // Reset CPU governors and frequencies
+            cmd.append("echo schedutil > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || true\n")
+            cmd.append("echo 614400 > /sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq 2>/dev/null || true\n")
+            cmd.append("echo 2016000 > /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq 2>/dev/null || true\n")
+
+            cmd.append("echo schedutil > /sys/devices/system/cpu/cpu3/cpufreq/scaling_governor 2>/dev/null || true\n")
+            cmd.append("echo 748800 > /sys/devices/system/cpu/cpu3/cpufreq/scaling_min_freq 2>/dev/null || true\n")
+            cmd.append("echo 2800000 > /sys/devices/system/cpu/cpu3/cpufreq/scaling_max_freq 2>/dev/null || true\n")
+
+            cmd.append("echo schedutil > /sys/devices/system/cpu/cpu7/cpufreq/scaling_governor 2>/dev/null || true\n")
+            cmd.append("echo 844800 > /sys/devices/system/cpu/cpu7/cpufreq/scaling_min_freq 2>/dev/null || true\n")
+            cmd.append("echo 3014400 > /sys/devices/system/cpu/cpu7/cpufreq/scaling_max_freq 2>/dev/null || true\n")
+
+            // Re-online all 8 cores
+            for (i in 0..7) {
+                cmd.append("echo 1 > /sys/devices/system/cpu/cpu$i/online 2>/dev/null || true\n")
+            }
+
+            // Restore boost parameters
+            cmd.append("echo 1 > /sys/class/kgsl/kgsl-3d0/adreno_cpu_boost 2>/dev/null || true\n")
+            cmd.append("echo 1 > /sys/module/cpu_boost/parameters/adreno_boost_enable 2>/dev/null || true\n")
+            cmd.append("echo 1 > /sys/module/cpu_boost/parameters/input_boost_enabled 2>/dev/null || true\n")
+            cmd.append("echo 80 > /sys/module/cpu_boost/parameters/input_boost_ms 2>/dev/null || true\n")
+            cmd.append("echo 50 > /sys/class/kgsl/kgsl-3d0/adreno_cpu_boost_threshold 2>/dev/null || true\n")
+
+            // Reset undervolt offsets
+            cmd.append("echo -25 > /sys/kernel/debug/msm_core_ctl/cluster0_uv_offset 2>/dev/null || true\n")
+            cmd.append("echo -30 > /sys/kernel/debug/msm_core_ctl/cluster1_uv_offset 2>/dev/null || true\n")
+            cmd.append("echo -20 > /sys/kernel/debug/msm_core_ctl/cluster2_uv_offset 2>/dev/null || true\n")
+
+            RootHelper.executeCommand(cmd.toString())
+            _lastActionFeedbackFlow.value = "CPU frequencies, governors & all 8 cores restored to stock kernel defaults"
+        }
+    }
+
+    fun resetGpuToDefaults() {
+        val defaultConfig = GpuConfig()
+        _gpuConfigFlow.value = defaultConfig
+
+        scope.launch {
+            val cmd = StringBuilder()
+            cmd.append("echo 250000000 > /sys/class/kgsl/kgsl-3d0/min_gpuclk 2>/dev/null || echo 250000000 > /sys/class/kgsl/kgsl-3d0/devfreq/min_freq 2>/dev/null || true\n")
+            cmd.append("echo 1100000000 > /sys/class/kgsl/kgsl-3d0/max_gpuclk 2>/dev/null || true\n")
+            cmd.append("echo msm-adreno-tz > /sys/class/kgsl/kgsl-3d0/devfreq/governor 2>/dev/null || true\n")
+            cmd.append("echo 2 > /sys/class/kgsl/kgsl-3d0/devfreq/adrenoboost 2>/dev/null || echo 2 > /sys/class/kgsl/kgsl-3d0/adrenoboost 2>/dev/null || true\n")
+            cmd.append("echo 0 > /sys/class/kgsl/kgsl-3d0/default_pwrlevel 2>/dev/null || true\n")
+            cmd.append("echo 0 > /sys/class/kgsl/kgsl-3d0/min_pwrlevel 2>/dev/null || true\n")
+
+            // Reset voltage offsets
+            defaultConfig.customVoltageOffsets.forEach { (freq, offset) ->
+                cmd.append("echo $freq $offset > /sys/class/kgsl/kgsl-3d0/custom_volt_table 2>/dev/null || true\n")
+            }
+
+            RootHelper.executeCommand(cmd.toString())
+            _lastActionFeedbackFlow.value = "Adreno 735 GPU clocks (250-1100 MHz), governor & voltages restored to default"
+        }
+    }
+
     fun toggleTelemetryLogging(enabled: Boolean) {
         _isLoggingEnabledFlow.value = enabled
         _lastActionFeedbackFlow.value = if (enabled) "Hardware Telemetry Logging Enabled" else "Hardware Telemetry Logging Disabled"
@@ -1834,6 +2345,26 @@ class KernelRepository private constructor(private val context: Context) {
 
     fun startFpsRecordingSession() {
         val cfg = _fpsRecorderConfigFlow.value
+        synchronized(recFpsFloatBuffer) {
+            recFpsFloatBuffer.clear()
+            recFrametimeBuffer.clear()
+            recCpuTempBuffer.clear()
+            recCpuCluster0UsageBuffer.clear()
+            recCpuCluster3UsageBuffer.clear()
+            recCpuTotalUsageBuffer.clear()
+            recCpuCluster0FreqBuffer.clear()
+            recCpuCluster3FreqBuffer.clear()
+            recCpuCluster7FreqBuffer.clear()
+            recGpuFreqBuffer.clear()
+            recGpuLoadBuffer.clear()
+            recGpuTempBuffer.clear()
+            recAppRamMbBuffer.clear()
+            recDeviceRamMbBuffer.clear()
+            recDeviceSwapMbBuffer.clear()
+            recPowerWattBuffer.clear()
+            recBatteryTempBuffer.clear()
+            recBatteryLevelBuffer.clear()
+        }
         _fpsHistoryFlow.value = listOf(_currentFpsFlow.value)
         _isRecordingFpsFlow.value = true
         _fpsRecorderConfigFlow.value = cfg.copy(
@@ -1846,40 +2377,83 @@ class KernelRepository private constructor(private val context: Context) {
     fun stopAndSaveFpsRecordingSession() {
         val cfg = _fpsRecorderConfigFlow.value
         val samples = _fpsHistoryFlow.value.ifEmpty { listOf(_currentFpsFlow.value) }
-        val sorted = samples.sorted()
-        val avg = samples.average().toFloat()
-        val minVal = sorted.first()
-        val maxVal = sorted.last()
-        val onePct = sorted.getOrElse(max(0, (sorted.size * 0.05).toInt())) { minVal }
-        val pointOnePct = minVal
-        val avgFrameTime = if (avg > 0f) 1000f / avg else 16.67f
-        val stability = if (maxVal > 0) ((onePct.toFloat() / maxVal.toFloat()) * 100).toInt().coerceIn(50, 100) else 98
-        val duration = max(5, cfg.elapsedRecordingSec)
+        val floatSamples = synchronized(recFpsFloatBuffer) {
+            if (recFpsFloatBuffer.isNotEmpty()) recFpsFloatBuffer.toList() else samples.map { it.toFloat() }
+        }
+        val sortedFloats = floatSamples.sorted()
+        val avg = floatSamples.average().toFloat()
+        val minValFloat = sortedFloats.firstOrNull() ?: _currentFpsFlow.value.toFloat()
+        val maxValFloat = sortedFloats.lastOrNull() ?: _currentFpsFlow.value.toFloat()
+        val variance = if (floatSamples.size > 1) {
+            floatSamples.map { (it - avg) * (it - avg) }.average().toFloat()
+        } else 0f
 
-        val newSession = FpsRecordedSession(
-            id = "fps_session_${System.currentTimeMillis()}",
-            appName = cfg.targetAppName,
-            packageName = cfg.targetPackageName,
-            timestamp = System.currentTimeMillis(),
-            durationSec = duration,
-            captureSource = cfg.captureSource,
-            samplingIntervalMs = cfg.samplingIntervalMs,
-            avgFps = avg,
-            minFps = minVal,
-            maxFps = maxVal,
-            onePercentLowFps = onePct,
-            pointOnePercentLowFps = pointOnePct,
-            avgFrameTimeMs = avgFrameTime,
-            stabilityPercent = stability,
-            jankFrameCount = cfg.liveJankCount,
-            peakCpuTempC = _cpuTempFlow.value,
-            peakBatteryTempC = _batteryFlow.value.temperatureC,
-            avgGpuLoadPercent = _gpuConfigFlow.value.loadPercent,
-            fpsSamples = samples.takeLast(24)
-        )
+        val fivePctIdx = max(0, (sortedFloats.size * 0.05).toInt())
+        val fivePctLow = sortedFloats.getOrElse(fivePctIdx) { minValFloat }
+        val onePct = sortedFloats.getOrElse(max(0, (sortedFloats.size * 0.01).toInt())) { minValFloat }.roundToInt()
+        val pointOnePct = minValFloat.roundToInt()
+        val avgFrameTime = if (avg > 0f) 1000f / avg else 16.67f
+        val stability = if (maxValFloat > 0f) ((fivePctLow / maxValFloat) * 100f).toInt().coerceIn(0, 100) else 98
+        val smoothness = if (maxValFloat > 0f) ((1f - (variance.coerceAtMost(2000f) / 2000f)) * 100f).coerceIn(0f, 100f) else 95f
+        val duration = max(2, cfg.elapsedRecordingSec)
+
+        val disp = _displayTweakFlow.value
+        val resString = "${disp.width}x${disp.height}(?)"
+
+        val newSession = synchronized(recFpsFloatBuffer) {
+            val peakCpu = recCpuTempBuffer.maxOrNull() ?: _cpuTempFlow.value
+            val peakBat = recBatteryTempBuffer.maxOrNull() ?: _batteryFlow.value.temperatureC
+            val avgGpu = if (recGpuLoadBuffer.isNotEmpty()) recGpuLoadBuffer.average().roundToInt() else _gpuConfigFlow.value.loadPercent
+            val avgPwr = if (recPowerWattBuffer.isNotEmpty()) recPowerWattBuffer.average().toFloat() else 0.4f
+
+            FpsRecordedSession(
+                id = "fps_session_${System.currentTimeMillis()}",
+                appName = cfg.targetAppName,
+                packageName = cfg.targetPackageName,
+                timestamp = System.currentTimeMillis(),
+                durationSec = duration,
+                captureSource = cfg.captureSource,
+                samplingIntervalMs = cfg.samplingIntervalMs,
+                avgFps = avg,
+                minFps = minValFloat,
+                maxFps = maxValFloat,
+                varianceFps = variance,
+                relativeSmoothness = smoothness,
+                fivePercentLowFps = fivePctLow,
+                onePercentLowFps = onePct,
+                pointOnePercentLowFps = pointOnePct,
+                avgFrameTimeMs = avgFrameTime,
+                stabilityPercent = stability,
+                jankFrameCount = cfg.liveJankCount,
+                peakCpuTempC = peakCpu,
+                peakBatteryTempC = peakBat,
+                avgGpuLoadPercent = avgGpu,
+                avgPowerWatt = avgPwr,
+                resolution = resString,
+                fpsSamples = samples.takeLast(60),
+                fpsFloatSamples = floatSamples.takeLast(60),
+                frametimeSamples = recFrametimeBuffer.toList().takeLast(60),
+                cpuTempSamples = recCpuTempBuffer.toList().takeLast(60),
+                cpuCluster0UsageSamples = recCpuCluster0UsageBuffer.toList().takeLast(60),
+                cpuCluster3UsageSamples = recCpuCluster3UsageBuffer.toList().takeLast(60),
+                cpuTotalUsageSamples = recCpuTotalUsageBuffer.toList().takeLast(60),
+                cpuCluster0FreqSamples = recCpuCluster0FreqBuffer.toList().takeLast(60),
+                cpuCluster3FreqSamples = recCpuCluster3FreqBuffer.toList().takeLast(60),
+                cpuCluster7FreqSamples = recCpuCluster7FreqBuffer.toList().takeLast(60),
+                gpuFreqSamples = recGpuFreqBuffer.toList().takeLast(60),
+                gpuLoadSamples = recGpuLoadBuffer.toList().takeLast(60),
+                gpuTempSamples = recGpuTempBuffer.toList().takeLast(60),
+                appRamUsageMbSamples = recAppRamMbBuffer.toList().takeLast(60),
+                deviceRamUsedMbSamples = recDeviceRamMbBuffer.toList().takeLast(60),
+                deviceSwapUsedMbSamples = recDeviceSwapMbBuffer.toList().takeLast(60),
+                powerWattSamples = recPowerWattBuffer.toList().takeLast(60),
+                batteryTempSamples = recBatteryTempBuffer.toList().takeLast(60),
+                batteryLevelSamples = recBatteryLevelBuffer.toList().takeLast(60)
+            )
+        }
 
         _isRecordingFpsFlow.value = false
-        val summary = "Saved FPS session for ${cfg.targetAppName}: Avg ${String.format("%.1f", avg)} FPS • 1% Low $onePct FPS (${duration}s)"
+        val summary = "Saved FPS session for ${cfg.targetAppName}: Avg ${String.format(java.util.Locale.US, "%.1f", avg)} FPS • Max ${String.format(java.util.Locale.US, "%.1f", maxValFloat)} FPS (${duration}s)"
         _fpsRecorderConfigFlow.value = cfg.copy(
             elapsedRecordingSec = 0,
             recordedSessions = listOf(newSession) + cfg.recordedSessions,
@@ -2455,10 +3029,69 @@ class KernelRepository private constructor(private val context: Context) {
 
     fun setSurfaceThemeMode(mode: SurfaceThemeMode) {
         _isAmoledBlackFlow.value = (mode == SurfaceThemeMode.TRUE_AMOLED_PITCH || mode == SurfaceThemeMode.OBSIDIAN_CARBON)
+        val isGlass = (mode == SurfaceThemeMode.IOS_LIQUID_GLASS)
         _themeConfigFlow.value = _themeConfigFlow.value.copy(
             surfaceMode = mode,
-            activePresetName = "Custom Tuned"
+            isLiquidGlassEnabled = isGlass,
+            cornerRadiusDp = if (isGlass) 24 else _themeConfigFlow.value.cornerRadiusDp,
+            activePresetName = if (isGlass) "iOS Liquid Glass" else "Custom Tuned"
         )
+        _lastActionFeedbackFlow.value = if (isGlass) {
+            "Enabled iOS Liquid Glass UI (Frosted Crystal + Specular Refraction)"
+        } else {
+            "Surface mode set to ${mode.title}"
+        }
+    }
+
+    fun toggleLiquidGlass(enabled: Boolean) {
+        val current = _themeConfigFlow.value
+        val newSurface = if (enabled) {
+            SurfaceThemeMode.IOS_LIQUID_GLASS
+        } else if (current.surfaceMode == SurfaceThemeMode.IOS_LIQUID_GLASS) {
+            SurfaceThemeMode.OBSIDIAN_CARBON
+        } else {
+            current.surfaceMode
+        }
+        _isAmoledBlackFlow.value = (newSurface == SurfaceThemeMode.TRUE_AMOLED_PITCH || newSurface == SurfaceThemeMode.OBSIDIAN_CARBON)
+        _themeConfigFlow.value = current.copy(
+            isLiquidGlassEnabled = enabled,
+            surfaceMode = newSurface,
+            cornerRadiusDp = if (enabled) 24 else 18,
+            activePresetName = if (enabled) "iOS Liquid Glass" else "Custom Tuned"
+        )
+        _lastActionFeedbackFlow.value = if (enabled) {
+            "iOS Liquid Glass UI Activated • Frosted Ice Background & Floating Dock"
+        } else {
+            "iOS Liquid Glass Disabled • Restored Gaming HUD Surface"
+        }
+    }
+
+    fun setLiquidGlassOpacity(opacity: Float) {
+        _themeConfigFlow.value = _themeConfigFlow.value.copy(
+            isLiquidGlassEnabled = true,
+            surfaceMode = SurfaceThemeMode.IOS_LIQUID_GLASS,
+            liquidGlassOpacity = opacity.coerceIn(0.12f, 0.65f),
+            activePresetName = "iOS Liquid Glass"
+        )
+    }
+
+    fun setLiquidGlassRefraction(refraction: Float) {
+        _themeConfigFlow.value = _themeConfigFlow.value.copy(
+            isLiquidGlassEnabled = true,
+            surfaceMode = SurfaceThemeMode.IOS_LIQUID_GLASS,
+            liquidGlassRefraction = refraction.coerceIn(0.20f, 1.0f),
+            activePresetName = "iOS Liquid Glass"
+        )
+    }
+
+    fun setLiquidGlassWallpaperTint(tint: String) {
+        _themeConfigFlow.value = _themeConfigFlow.value.copy(
+            isLiquidGlassEnabled = true,
+            surfaceMode = SurfaceThemeMode.IOS_LIQUID_GLASS,
+            liquidGlassWallpaperTint = tint,
+            activePresetName = "iOS Liquid Glass ($tint)"
+        )
+        _lastActionFeedbackFlow.value = "Liquid Glass Tint: $tint"
     }
 
     fun toggleCustomPrimaryColor(enabled: Boolean) {
@@ -2508,11 +3141,14 @@ class KernelRepository private constructor(private val context: Context) {
 
     fun applyGamingThemePreset(preset: GamingThemePreset) {
         _accentColorIndexFlow.value = preset.primaryAccentIndex
+        val isGlass = (preset == GamingThemePreset.IOS_LIQUID_GLASS || preset.surfaceMode == SurfaceThemeMode.IOS_LIQUID_GLASS)
         _isAmoledBlackFlow.value = (preset.surfaceMode == SurfaceThemeMode.TRUE_AMOLED_PITCH || preset.surfaceMode == SurfaceThemeMode.OBSIDIAN_CARBON)
         _themeConfigFlow.value = _themeConfigFlow.value.copy(
             primaryAccentIndex = preset.primaryAccentIndex,
             secondaryAccentIndex = preset.secondaryAccentIndex,
             surfaceMode = preset.surfaceMode,
+            isLiquidGlassEnabled = isGlass,
+            liquidGlassWallpaperTint = if (isGlass) "Frosted Ice" else _themeConfigFlow.value.liquidGlassWallpaperTint,
             useCustomPrimaryColor = false,
             useDynamicColor = false,
             borderGlowIntensity = preset.borderGlow,

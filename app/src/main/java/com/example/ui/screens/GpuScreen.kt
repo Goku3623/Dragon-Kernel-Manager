@@ -20,6 +20,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.testTag
 import com.example.data.repository.KernelRepository
 import com.example.ui.theme.DangerRed
 import com.example.ui.theme.NeonCyan
@@ -50,7 +51,7 @@ fun GpuScreen(repository: KernelRepository) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "GPU FREQUENCY & VOLTAGE SCALING",
                         fontSize = 10.sp,
@@ -66,14 +67,35 @@ fun GpuScreen(repository: KernelRepository) {
                         color = MaterialTheme.colorScheme.primary
                     )
                 }
-                Badge(containerColor = MaterialTheme.colorScheme.primaryContainer) {
-                    Text(
-                        text = "Load: ${gpuConfig.loadPercent}%",
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.primary
-                    )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilledTonalButton(
+                        onClick = { repository.resetGpuToDefaults() },
+                        shape = RoundedCornerShape(50),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        modifier = Modifier
+                            .height(30.dp)
+                            .testTag("btn_reset_gpu_header")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.RestartAlt,
+                            contentDescription = "Reset GPU Defaults",
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Reset", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Badge(containerColor = MaterialTheme.colorScheme.primaryContainer) {
+                        Text(
+                            text = "Load: ${gpuConfig.loadPercent}%",
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
                 }
             }
             Spacer(modifier = Modifier.height(16.dp))
@@ -536,6 +558,77 @@ fun GpuScreen(repository: KernelRepository) {
                     }
                 }
             }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        // Restore Stock GPU Defaults Card
+        item(key = "gpu_reset_section") {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("card_gpu_reset"),
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = CardDefaults.outlinedCardBorder()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.RestartAlt,
+                                contentDescription = "Reset GPU",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Reset GPU Tuning",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp
+                            )
+                        }
+                        Badge(containerColor = MaterialTheme.colorScheme.surfaceVariant) {
+                            Text(
+                                text = "Factory Kernel Defaults",
+                                fontSize = 10.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Reverts Adreno 735 to default clock scaling (250 - 1100 MHz), restores stock msm-adreno-tz governor, Power Level 0, DYNAMIC AdrenoBoost, and default voltage table offsets.",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(14.dp))
+                    OutlinedButton(
+                        onClick = { repository.resetGpuToDefaults() },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("btn_reset_gpu_defaults"),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.RestartAlt,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Revert GPU to Default Values",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
         }
     }
 }

@@ -45,6 +45,9 @@ fun ProfileSelectionDialog(
     liveFps: Int? = null,
     liveCpuTemp: Float? = null,
     liveGpuMhz: Int? = null,
+    isRecordingFps: Boolean = false,
+    elapsedRecordingSec: Int = 0,
+    onToggleFpsRecord: () -> Unit = {},
     onSelectProfile: (BatteryProfile) -> Unit,
     onSelectCustomProfile: (CustomBatteryProfile) -> Unit = {},
     onDeleteCustomProfile: ((String) -> Unit)? = null,
@@ -208,6 +211,98 @@ fun ProfileSelectionDialog(
                                 fontFamily = FontFamily.Monospace,
                                 fontWeight = FontWeight.Bold,
                                 color = AmberGold
+                            )
+                        }
+                    }
+                }
+
+                // FPS Recording Option in Notification Pop-Up
+                Spacer(modifier = Modifier.height(7.dp))
+                val isRec = isRecordingFps
+                val recBorderColor = if (isRec) DangerRed else primaryColor.copy(alpha = 0.5f)
+                val recBgBrush = if (isRec) {
+                    Brush.horizontalGradient(listOf(DangerRed.copy(alpha = 0.28f), Color(0xFF881337).copy(alpha = 0.22f)))
+                } else {
+                    Brush.horizontalGradient(listOf(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)))
+                }
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(recBgBrush)
+                        .border(1.dp, recBorderColor, RoundedCornerShape(10.dp))
+                        .clickable(onClick = onToggleFpsRecord)
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                        .testTag("notification_popup_fps_record_btn"),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // Glowing / Pulsing record dot
+                        Box(
+                            modifier = Modifier
+                                .size(9.dp)
+                                .clip(CircleShape)
+                                .background(if (isRec) DangerRed else primaryColor)
+                        )
+                        Column {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = if (isRec) "RECORDING FPS" else "RECORD FPS BENCHMARK",
+                                    fontSize = 10.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Black,
+                                    letterSpacing = 0.5.sp,
+                                    color = if (isRec) DangerRed else MaterialTheme.colorScheme.onSurface
+                                )
+                                if (isRec) {
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = String.format(Locale.US, "%02d:%02d", elapsedRecordingSec / 60, elapsedRecordingSec % 60),
+                                        fontSize = 10.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.Bold,
+                                        color = DangerRed
+                                    )
+                                }
+                            }
+                            Text(
+                                text = if (isRec) "Live session active • Tap to stop & save" else "Tap to start background recording",
+                                fontSize = 8.5.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = if (isRec) DangerRed else primaryColor.copy(alpha = 0.2f),
+                        border = androidx.compose.foundation.BorderStroke(
+                            0.8.dp,
+                            if (isRec) DangerRed else primaryColor.copy(alpha = 0.6f)
+                        )
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isRec) Icons.Default.Stop else Icons.Default.FiberManualRecord,
+                                contentDescription = if (isRec) "Stop" else "Record",
+                                tint = if (isRec) Color.White else primaryColor,
+                                modifier = Modifier.size(10.dp)
+                            )
+                            Spacer(modifier = Modifier.width(3.dp))
+                            Text(
+                                text = if (isRec) "STOP" else "START",
+                                fontSize = 9.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = if (isRec) Color.White else primaryColor
                             )
                         }
                     }

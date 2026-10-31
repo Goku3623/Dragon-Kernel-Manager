@@ -199,7 +199,371 @@ fun ThemeStudioSection(
             }
         }
 
-        // 2. 1-TAP GAMING THEME PRESETS (6 COMPLETE THEMES)
+        // 1B. iOS LIQUID GLASS UI ENGINE (TRANSLUCENT FROSTED CRYSTAL & SPECULAR REFRACTION)
+        val isLiquidGlassActive = themeConfig.isLiquidGlassEnabled || themeConfig.surfaceMode == SurfaceThemeMode.IOS_LIQUID_GLASS
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("ios_liquid_glass_card"),
+            shape = cardShape,
+            colors = CardDefaults.cardColors(
+                containerColor = if (isLiquidGlassActive) {
+                    Color.White.copy(alpha = (themeConfig.liquidGlassOpacity * 0.45f).coerceIn(0.10f, 0.28f))
+                } else {
+                    MaterialTheme.colorScheme.surface
+                }
+            ),
+            border = androidx.compose.foundation.BorderStroke(
+                width = if (isLiquidGlassActive) 1.4.dp else 1.dp,
+                color = if (isLiquidGlassActive) {
+                    Color.White.copy(alpha = (0.45f * themeConfig.liquidGlassRefraction).coerceIn(0.22f, 0.75f))
+                } else {
+                    MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)
+                }
+            )
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        Brush.linearGradient(
+                            colors = if (isLiquidGlassActive) {
+                                listOf(
+                                    Color.White.copy(alpha = 0.16f * themeConfig.liquidGlassRefraction),
+                                    Color(0xFF38BDF8).copy(alpha = 0.12f),
+                                    Color(0xFFA855F7).copy(alpha = 0.10f),
+                                    Color.Transparent
+                                )
+                            } else {
+                                listOf(
+                                    Color(0xFF38BDF8).copy(alpha = 0.08f),
+                                    Color.Transparent
+                                )
+                            }
+                        )
+                    )
+                    .padding(16.dp)
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(
+                                        Brush.linearGradient(
+                                            colors = listOf(
+                                                Color.White.copy(alpha = 0.32f),
+                                                Color(0xFF38BDF8).copy(alpha = 0.28f),
+                                                Color(0xFFA855F7).copy(alpha = 0.28f)
+                                            )
+                                        )
+                                    )
+                                    .border(
+                                        1.dp,
+                                        Color.White.copy(alpha = 0.55f),
+                                        RoundedCornerShape(12.dp)
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.BlurOn,
+                                    contentDescription = "iOS Liquid Glass",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        text = "iOS Liquid Glass (Frosted Ice)",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Black,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = Color(0xFF38BDF8).copy(alpha = 0.22f),
+                                        border = androidx.compose.foundation.BorderStroke(
+                                            0.8.dp,
+                                            Color(0xFFE0F7FA).copy(alpha = 0.65f)
+                                        )
+                                    ) {
+                                        Text(
+                                            text = "FROSTED ICE",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = Color(0xFFE0F7FA),
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = "Translucent frosted ice crystal cards, sub-zero glacial refraction, floating glass dock & arctic permafrost backdrop",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Switch(
+                            checked = isLiquidGlassActive,
+                            onCheckedChange = { enabled ->
+                                repository.toggleLiquidGlass(enabled)
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = Color(0xFF38BDF8),
+                                checkedBorderColor = Color.White.copy(alpha = 0.7f)
+                            ),
+                            modifier = Modifier.testTag("switch_ios_liquid_glass")
+                        )
+                    }
+
+                    // Interactive Liquid Glass Sample Preview Pill
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(
+                                Brush.linearGradient(
+                                    colors = listOf(
+                                        Color(0xFF051324),
+                                        Color(0xFF0A223E),
+                                        Color(0xFF0F3258)
+                                    )
+                                )
+                            )
+                            .border(
+                                width = 1.dp,
+                                color = Color(0xFFE0F7FA).copy(alpha = 0.35f),
+                                shape = RoundedCornerShape(18.dp)
+                            )
+                            .padding(12.dp)
+                    ) {
+                        // Glowing background orbs inside preview box
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(
+                                        Brush.linearGradient(
+                                            colors = listOf(
+                                                Color(0xFFE0F7FA).copy(alpha = (themeConfig.liquidGlassOpacity + 0.10f).coerceAtMost(0.55f)),
+                                                Color(0xFF0D2540).copy(alpha = (themeConfig.liquidGlassOpacity * 0.70f).coerceAtLeast(0.12f))
+                                            )
+                                        )
+                                    )
+                                    .border(
+                                        width = 1.2.dp,
+                                        brush = Brush.linearGradient(
+                                            colors = listOf(
+                                                Color(0xFFE0F7FA).copy(alpha = (0.85f * themeConfig.liquidGlassRefraction).coerceIn(0.35f, 0.95f)),
+                                                Color(0xFF38BDF8).copy(alpha = 0.30f),
+                                                Color(0xFFBAE6FD).copy(alpha = 0.55f * themeConfig.liquidGlassRefraction)
+                                            )
+                                        ),
+                                        shape = RoundedCornerShape(14.dp)
+                                    )
+                                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column {
+                                        Text(
+                                            text = if (isLiquidGlassActive) "FROSTED ICE ENGINE ACTIVE" else "TAP TO ENABLE FROSTED ICE",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontWeight = FontWeight.Black,
+                                            color = Color.White
+                                        )
+                                        Text(
+                                            text = "Tint: ${themeConfig.liquidGlassWallpaperTint} • Frost ${(themeConfig.liquidGlassOpacity * 100).roundToInt()}% • Specular ${(themeConfig.liquidGlassRefraction * 100).roundToInt()}%",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = Color(0xFFE0F7FA)
+                                        )
+                                    }
+                                    FilledTonalButton(
+                                        onClick = { repository.toggleLiquidGlass(!isLiquidGlassActive) },
+                                        shape = RoundedCornerShape(50),
+                                        colors = ButtonDefaults.filledTonalButtonColors(
+                                            containerColor = Color(0xFF38BDF8).copy(alpha = 0.30f),
+                                            contentColor = Color(0xFFE0F7FA)
+                                        ),
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                        modifier = Modifier.height(32.dp)
+                                    ) {
+                                        Text(
+                                            text = if (isLiquidGlassActive) "Disable" else "Apply Ice",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Liquid Glass Controls (always customizable, auto-enables if adjusted)
+                    Text(
+                        text = "FROSTED ICE REFRACTION TINT",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        color = primaryColor
+                    )
+
+                    val glassTints = listOf(
+                        Triple("Frosted Ice", Color(0xFF38BDF8), Color(0xFFE0F7FA)),
+                        Triple("Glacial Cyan", Color(0xFF06B6D4), Color(0xFF67E8F9)),
+                        Triple("Polar Aurora", Color(0xFF38BDF8), Color(0xFF818CF8)),
+                        Triple("Deep Permafrost", Color(0xFF0284C7), Color(0xFF0F172A)),
+                        Triple("Diamond Frost", Color(0xFFF0F9FF), Color(0xFFBAE6FD))
+                    )
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        glassTints.forEach { (tintName, c1, c2) ->
+                            val isSelectedTint = themeConfig.liquidGlassWallpaperTint == tintName
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(50))
+                                    .background(
+                                        if (isSelectedTint) c1.copy(alpha = 0.24f)
+                                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                                    )
+                                    .border(
+                                        width = if (isSelectedTint) 1.5.dp else 1.dp,
+                                        color = if (isSelectedTint) Color.White else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
+                                        shape = RoundedCornerShape(50)
+                                    )
+                                    .clickable {
+                                        if (!isLiquidGlassActive) {
+                                            repository.toggleLiquidGlass(true)
+                                        }
+                                        repository.setLiquidGlassWallpaperTint(tintName)
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 7.dp)
+                                    .testTag("liquid_glass_tint_${tintName.lowercase().replace(" ", "_")}"),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(14.dp)
+                                        .clip(CircleShape)
+                                        .background(Brush.linearGradient(listOf(c1, c2)))
+                                        .border(0.8.dp, Color.White.copy(alpha = 0.8f), CircleShape)
+                                )
+                                Text(
+                                    text = tintName,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = if (isSelectedTint) FontWeight.ExtraBold else FontWeight.Medium,
+                                    color = if (isSelectedTint) Color.White else MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+
+                    // Frosted Ice Translucency Slider
+                    Column {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "Frosted Ice Translucency",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "${(themeConfig.liquidGlassOpacity * 100).roundToInt()}%",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                color = primaryColor
+                            )
+                        }
+                        Slider(
+                            value = themeConfig.liquidGlassOpacity,
+                            onValueChange = {
+                                if (!isLiquidGlassActive) repository.toggleLiquidGlass(true)
+                                repository.setLiquidGlassOpacity(it)
+                            },
+                            valueRange = 0.12f..0.65f,
+                            colors = SliderDefaults.colors(
+                                thumbColor = Color(0xFFE0F7FA),
+                                activeTrackColor = primaryColor
+                            ),
+                            modifier = Modifier.testTag("slider_liquid_glass_opacity")
+                        )
+                    }
+
+                    // Specular Rim Refraction Slider
+                    Column {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "Specular Frost Refraction & Prism Highlight",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "${(themeConfig.liquidGlassRefraction * 100).roundToInt()}%",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                color = secondaryColor
+                            )
+                        }
+                        Slider(
+                            value = themeConfig.liquidGlassRefraction,
+                            onValueChange = {
+                                if (!isLiquidGlassActive) repository.toggleLiquidGlass(true)
+                                repository.setLiquidGlassRefraction(it)
+                            },
+                            valueRange = 0.20f..1.0f,
+                            colors = SliderDefaults.colors(
+                                thumbColor = Color.White,
+                                activeTrackColor = secondaryColor
+                            ),
+                            modifier = Modifier.testTag("slider_liquid_glass_refraction")
+                        )
+                    }
+                }
+            }
+        }
+
+        // 2. 1-TAP GAMING THEME PRESETS (7 COMPLETE THEMES)
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = cardShape,
@@ -938,6 +1302,7 @@ fun ThemeStudioSection(
                             SurfaceThemeMode.CYBER_SLATE -> SlateDark
                             SurfaceThemeMode.CRIMSON_ABYSS -> CrimsonAbyssBg
                             SurfaceThemeMode.MIDNIGHT_VIOLET -> MidnightVioletBg
+                            SurfaceThemeMode.IOS_LIQUID_GLASS -> LiquidGlassBaseBg
                         }
                         val modePreviewCard = when (mode) {
                             SurfaceThemeMode.TRUE_AMOLED_PITCH -> PitchAmoledSurfaceVariant
@@ -945,6 +1310,7 @@ fun ThemeStudioSection(
                             SurfaceThemeMode.CYBER_SLATE -> SlateSurfaceVariant
                             SurfaceThemeMode.CRIMSON_ABYSS -> CrimsonAbyssSurfaceVariant
                             SurfaceThemeMode.MIDNIGHT_VIOLET -> MidnightVioletSurfaceVariant
+                            SurfaceThemeMode.IOS_LIQUID_GLASS -> LiquidGlassFrostSurfaceVariant
                         }
 
                         Row(

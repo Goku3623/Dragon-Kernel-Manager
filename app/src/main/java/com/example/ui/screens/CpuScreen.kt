@@ -20,6 +20,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.testTag
 import com.example.data.model.AdrenoCpuBoostConfig
 import com.example.data.model.CpuCluster
 import com.example.data.repository.KernelRepository
@@ -51,7 +52,7 @@ fun CpuScreen(repository: KernelRepository) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "CPU FREQUENCY & CLUSTER TUNER",
                         fontSize = 10.sp,
@@ -67,14 +68,35 @@ fun CpuScreen(repository: KernelRepository) {
                         color = MaterialTheme.colorScheme.primary
                     )
                 }
-                Badge(containerColor = MaterialTheme.colorScheme.primaryContainer) {
-                    Text(
-                        text = "Avg Load: $cpuLoad%",
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.primary
-                    )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilledTonalButton(
+                        onClick = { repository.resetCpuToDefaults() },
+                        shape = RoundedCornerShape(50),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        modifier = Modifier
+                            .height(30.dp)
+                            .testTag("btn_reset_cpu_header")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.RestartAlt,
+                            contentDescription = "Reset CPU Defaults",
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Reset", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Badge(containerColor = MaterialTheme.colorScheme.primaryContainer) {
+                        Text(
+                            text = "Avg Load: $cpuLoad%",
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
                 }
             }
             Spacer(modifier = Modifier.height(16.dp))
@@ -251,6 +273,76 @@ fun CpuScreen(repository: KernelRepository) {
                 onUpdateUndervolt = { offset -> repository.updateClusterUndervolt(cluster.id, offset) }
             )
             Spacer(modifier = Modifier.height(14.dp))
+        }
+
+        // Restore Stock CPU Defaults Card
+        item(key = "cpu_reset_section") {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("card_cpu_reset"),
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = CardDefaults.outlinedCardBorder()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.RestartAlt,
+                                contentDescription = "Reset CPU",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Reset CPU Tuning",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp
+                            )
+                        }
+                        Badge(containerColor = MaterialTheme.colorScheme.surfaceVariant) {
+                            Text(
+                                text = "Factory Kernel Defaults",
+                                fontSize = 10.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Reverts all 3 CPU clusters (Silver, Gold, Prime) to stock frequencies, brings all 8 cores online, restores default schedutil governors, undervolt offsets, and Adreno CPU Boost.",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(14.dp))
+                    OutlinedButton(
+                        onClick = { repository.resetCpuToDefaults() },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("btn_reset_cpu_defaults"),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.RestartAlt,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Revert CPU to Default Values",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
         }
     }
 }

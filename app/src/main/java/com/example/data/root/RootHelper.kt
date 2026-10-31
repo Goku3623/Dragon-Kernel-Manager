@@ -3,10 +3,14 @@ package com.example.data.root
 import android.os.Build
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader
+import java.io.BufferedWriter
 import java.io.File
 import java.io.InputStreamReader
+import java.io.OutputStreamWriter
 
 data class CommandResult(
     val exitCode: Int,
@@ -18,6 +22,11 @@ object RootHelper {
     private const val TAG = "DragonRoot"
     var isRootAvailable: Boolean = false
         private set
+
+    private val telemetryMutex = Mutex()
+    private var persistentSuProcess: Process? = null
+    private var persistentSuWriter: BufferedWriter? = null
+    private var persistentSuReader: BufferedReader? = null
 
     init {
         checkRootSync()
@@ -76,14 +85,20 @@ object RootHelper {
         if (!granted) return@withContext false
         val grantCmd = """
             pm grant $packageName android.permission.PACKAGE_USAGE_STATS 2>/dev/null || true
+            pm grant $packageName android.permission.DUMP 2>/dev/null || true
             pm grant $packageName android.permission.BATTERY_STATS 2>/dev/null || true
+            pm grant $packageName android.permission.WRITE_SECURE_SETTINGS 2>/dev/null || true
             appops set $packageName GET_USAGE_STATS allow 2>/dev/null || true
             appops set $packageName SYSTEM_ALERT_WINDOW allow 2>/dev/null || true
+            appops set $packageName PROJECT_MEDIA allow 2>/dev/null || true
             chmod 0644 /sys/class/drm/sde-crtc-0/measured_fps 2>/dev/null || true
             chmod 0644 /sys/class/drm/card0/sde-crtc-0/measured_fps 2>/dev/null || true
+            chmod 0644 /sys/class/drm/card0-DSI-1/measured_fps 2>/dev/null || true
             chmod 0644 /sys/class/graphics/fb0/measured_fps 2>/dev/null || true
+            chmod 0644 /sys/class/kgsl/kgsl-3d0/gpubusy /sys/class/kgsl/kgsl-3d0/gpuclk 2>/dev/null || true
             chmod 0666 /sys/class/kgsl/kgsl-3d0/throttling 2>/dev/null || true
             chmod 0666 /sys/class/kgsl/kgsl-3d0/devfreq/adrenoboost 2>/dev/null || true
+            dumpsys SurfaceFlinger --timestats -enable 2>/dev/null || true
             # Clean up any legacy DragonAccessibilityMonitorService entry that could cause Android DisplayModeDirector to cap refresh rate
             cur_acc=$(settings get secure enabled_accessibility_services 2>/dev/null)
             if echo "${'$'}cur_acc" | grep -q "DragonAccessibilityMonitorService"; then
@@ -402,6 +417,69 @@ object RootHelper {
         } catch (e: Exception) {
             Log.e(TAG, "Error executing command: $cmd", e)
             CommandResult(-1, "Execution failed: ${e.message}", isSimulated = false)
+        }
+    }
+
+    /**
+     * Zero-fork persistent shell pipe for real-time per-app & game FPS telemetry.
+     * Avoids spawning a new `su` process on every tick while maintaining full root access to
+     * SurfaceFlinger (--latency, 1013 page flips), gfxinfo framestats, and DRM measured_fps.
+     */
+    suspend fun executeFastTelemetryCommand(cmd: String): CommandResult = withContext(Dispatchers.IO) {
+        telemetryMutex.withLock {
+            val useRoot = isRootAvailable
+            try {
+                var proc = persistentSuProcess
+                val isAlive = try {
+                    proc != null && proc.isAlive
+                } catch (_: Throwable) {
+                    false
+                }
+                if (proc == null || !isAlive || persistentSuWriter == null || persistentSuReader == null) {
+                    try {
+                        proc?.destroy()
+                    } catch (_: Throwable) {
+                    }
+                    val builder = ProcessBuilder(if (useRoot) "su" else "sh")
+                    builder.redirectErrorStream(true)
+                    proc = builder.start()
+                    persistentSuProcess = proc
+                    persistentSuWriter = BufferedWriter(OutputStreamWriter(proc.outputStream))
+                    persistentSuReader = BufferedReader(InputStreamReader(proc.inputStream))
+                }
+
+                val writer = persistentSuWriter ?: return@withLock CommandResult(-1, "", isSimulated = !useRoot)
+                val reader = persistentSuReader ?: return@withLock CommandResult(-1, "", isSimulated = !useRoot)
+                val marker = "___DRAGON_TELEM_EOF___"
+
+                writer.write(cmd)
+                writer.write("\necho $marker\n")
+                writer.flush()
+
+                val sb = StringBuilder()
+                var lineCount = 0
+                while (lineCount < 400) {
+                    val line = reader.readLine() ?: break
+                    if (line.contains(marker)) {
+                        val before = line.substringBefore(marker)
+                        if (before.isNotBlank()) sb.append(before).append("\n")
+                        break
+                    }
+                    sb.append(line).append("\n")
+                    lineCount++
+                }
+                val out = sb.toString().trim()
+                CommandResult(0, out, isSimulated = (!useRoot && out.isEmpty()))
+            } catch (e: Exception) {
+                try {
+                    persistentSuProcess?.destroy()
+                } catch (_: Throwable) {
+                }
+                persistentSuProcess = null
+                persistentSuWriter = null
+                persistentSuReader = null
+                CommandResult(-1, "", isSimulated = !useRoot)
+            }
         }
     }
 

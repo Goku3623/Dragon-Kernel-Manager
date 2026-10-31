@@ -52,6 +52,9 @@ class DragonMonitorService : Service() {
             ACTION_CYCLE_PROFILE -> {
                 repository.cycleNextBatteryProfile()
             }
+            ACTION_TOGGLE_FPS_REC -> {
+                repository.toggleFpsRecording()
+            }
         }
 
         startForeground(NOTIFICATION_ID, buildTelemetryNotification())
@@ -79,7 +82,8 @@ class DragonMonitorService : Service() {
                 if (isInteractive) {
                     val customProfile = repository.activeCustomProfileFlow.value
                     val modeTag = customProfile?.title ?: profile.title
-                    val sig = "${battery.levelPercent}_${abs(battery.currentMa)}_${battery.temperatureC.toInt()}_${battery.screenOnTimeFormatted}_${battery.screenOffTimeFormatted}_$modeTag"
+                    val isRec = repository.isRecordingFpsFlow.value
+                    val sig = "${battery.levelPercent}_${abs(battery.currentMa)}_${battery.temperatureC.toInt()}_${battery.screenOnTimeFormatted}_${battery.screenOffTimeFormatted}_${modeTag}_rec$isRec"
                     if (sig != lastNotificationSignature) {
                         lastNotificationSignature = sig
                         notificationManager.notify(NOTIFICATION_ID, buildTelemetryNotification())
@@ -189,6 +193,17 @@ class DragonMonitorService : Service() {
             append(line6Awake)
         }
 
+        val isRecording = repository.isRecordingFpsFlow.value
+        val fpsRecIntent = Intent(this, DragonMonitorService::class.java).apply {
+            action = ACTION_TOGGLE_FPS_REC
+        }
+        val fpsRecPendingIntent = PendingIntent.getService(
+            this,
+            1003,
+            fpsRecIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
         return NotificationCompat.Builder(this, DragonKernelApp.CHANNEL_TELEMETRY)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle(line1Power)
@@ -205,6 +220,11 @@ class DragonMonitorService : Service() {
             .setShowWhen(false)
             .setSilent(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
+            .addAction(
+                0,
+                if (isRecording) "⏹ Stop REC FPS" else "⏺ Record FPS",
+                fpsRecPendingIntent
+            )
             .addAction(
                 0,
                 "Change Battery Profile",
@@ -260,6 +280,7 @@ class DragonMonitorService : Service() {
         const val ACTION_QUICK_GAMING = "com.example.dragonkernel.QUICK_GAMING"
         const val ACTION_QUICK_BALANCED = "com.example.dragonkernel.QUICK_BALANCED"
         const val ACTION_CYCLE_PROFILE = "com.example.dragonkernel.CYCLE_PROFILE"
+        const val ACTION_TOGGLE_FPS_REC = "com.example.dragonkernel.TOGGLE_FPS_REC"
 
         fun startService(context: Context) {
             val intent = Intent(context, DragonMonitorService::class.java).apply {

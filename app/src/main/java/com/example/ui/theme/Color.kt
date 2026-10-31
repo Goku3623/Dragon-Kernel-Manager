@@ -63,6 +63,16 @@ val MidnightVioletSurface = Color(0xFF11091F)
 val MidnightVioletSurfaceVariant = Color(0xFF1B1030)
 val MidnightVioletBorder = Color(0xFF311D54)
 
+// 6. iOS Liquid Glass (Frosted Ice & Sub-Zero Glacial Refraction)
+val LiquidGlassBaseBg = Color(0xFF081426)
+val LiquidGlassFrostSurface = Color(0x3B2D5580)
+val LiquidGlassFrostSurfaceVariant = Color(0x553E72A8)
+val LiquidGlassSpecularBorder = Color(0x85E0F7FF)
+val LiquidGlassIceBlue = Color(0xFF38BDF8)
+val LiquidGlassPearlWhite = Color(0xFFF0F9FF)
+val FrostedIceGlacierBg = Color(0xFF071322)
+val FrostedIceCrystalline = Color(0xFFE0F7FA)
+
 val TextPrimary = Color(0xFFF4F7FF)
 val TextSecondary = Color(0xFF9BA8C2)
 val TextMuted = Color(0xFF5E6C87)
@@ -71,5 +81,3 @@ val GaugeBg = Color(0xFF171D2E)
 val WarningOrange = Color(0xFFFF9100)
 val DangerRed = Color(0xFFFF2A4B)
 val SuccessGreen = Color(0xFF00F57A)
-
-

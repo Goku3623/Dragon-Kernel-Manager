@@ -212,9 +212,12 @@ data class ChargingControls(
 data class FpsOverlayConfig(
     val isEnabled: Boolean = false,
     val showFps: Boolean = true,
+    val showForegroundApp: Boolean = true,
+    val showFrameTimeMs: Boolean = true,
     val showCpuTemp: Boolean = true,
     val showBatTemp: Boolean = true,
-    val showGpuClock: Boolean = true
+    val showGpuClock: Boolean = true,
+    val scaleFactor: Float = 1.0f
 )
 
 data class FpsRecordedSession(
@@ -226,8 +229,11 @@ data class FpsRecordedSession(
     val captureSource: String,
     val samplingIntervalMs: Int,
     val avgFps: Float,
-    val minFps: Int,
-    val maxFps: Int,
+    val minFps: Float,
+    val maxFps: Float,
+    val varianceFps: Float = 14.2f,
+    val relativeSmoothness: Float = 96.4f,
+    val fivePercentLowFps: Float = 108.0f,
     val onePercentLowFps: Int,
     val pointOnePercentLowFps: Int,
     val avgFrameTimeMs: Float,
@@ -236,13 +242,42 @@ data class FpsRecordedSession(
     val peakCpuTempC: Float,
     val peakBatteryTempC: Float,
     val avgGpuLoadPercent: Int,
-    val fpsSamples: List<Int>
+    val avgPowerWatt: Float = 3.8f,
+    val resolution: String = "1220x2712(?)",
+    val fpsSamples: List<Int>,
+    val fpsFloatSamples: List<Float> = emptyList(),
+    val frametimeSamples: List<Float> = emptyList(),
+    val cpuTempSamples: List<Float> = emptyList(),
+    val cpuCluster0UsageSamples: List<Int> = emptyList(),
+    val cpuCluster3UsageSamples: List<Int> = emptyList(),
+    val cpuTotalUsageSamples: List<Int> = emptyList(),
+    val cpuCluster0FreqSamples: List<Int> = emptyList(),
+    val cpuCluster3FreqSamples: List<Int> = emptyList(),
+    val cpuCluster7FreqSamples: List<Int> = emptyList(),
+    val gpuFreqSamples: List<Int> = emptyList(),
+    val gpuLoadSamples: List<Int> = emptyList(),
+    val gpuTempSamples: List<Float> = emptyList(),
+    val appRamUsageMbSamples: List<Int> = emptyList(),
+    val deviceRamUsedMbSamples: List<Int> = emptyList(),
+    val deviceSwapUsedMbSamples: List<Int> = emptyList(),
+    val powerWattSamples: List<Float> = emptyList(),
+    val batteryTempSamples: List<Float> = emptyList(),
+    val batteryLevelSamples: List<Int> = emptyList()
 )
 
 data class FpsRecorderConfig(
-    val targetAppName: String = "Global SurfaceFlinger (All Apps)",
+    val targetAppName: String = "Auto-Follow Foreground App / Game",
     val targetPackageName: String = "surfaceflinger.global",
-    val captureSource: String = "DRM / Adreno Sysfs", // DRM / Adreno Sysfs, SurfaceFlinger PageFlip, GFXInfo Framestats
+    val autoFollowForegroundApp: Boolean = true,
+    val detectedForegroundAppName: String = "Detecting Foreground App...",
+    val detectedForegroundPackage: String = "",
+    val detectedSurfaceLayer: String = "SurfaceFlinger Active Layer",
+    val isRootFpsGranted: Boolean = false,
+    val isUsageStatsGranted: Boolean = false,
+    val isDumpPermissionGranted: Boolean = false,
+    val isOverlayPermissionGranted: Boolean = false,
+    val displayRefreshRateHz: Int = 120,
+    val captureSource: String = "SurfaceFlinger Layer + PageFlip", // SurfaceFlinger Layer + PageFlip, DRM / Adreno Sysfs, GFXInfo Framestats
     val samplingIntervalMs: Int = 250, // 100, 250, 500, 1000
     val durationPresetSec: Int = 0, // 0 = Manual Stop, 60, 180, 300, 600, 900
     val autoStartOnAppLaunch: Boolean = true,
@@ -258,28 +293,51 @@ data class FpsRecorderConfig(
     val livePointOnePercentLowFps: Int = 114,
     val liveStabilityPercent: Int = 98,
     val liveJankCount: Int = 0,
-    val liveHardwareSourceStatus: String = "Root DRM / SurfaceFlinger PageFlip",
+    val liveHardwareSourceStatus: String = "SurfaceFlinger Per-App Layer Latency + PageFlip",
     val recordedSessions: List<FpsRecordedSession> = listOf(
         FpsRecordedSession(
             id = "fps_session_1",
-            appName = "Genshin Impact",
+            appName = "System Launcher / Game Session",
             packageName = "com.miHoYo.GenshinImpact",
-            timestamp = System.currentTimeMillis() - 1800_000L,
-            durationSec = 300,
-            captureSource = "DRM / Adreno Sysfs",
+            timestamp = System.currentTimeMillis() - 600_000L,
+            durationSec = 6,
+            captureSource = "SurfaceFlinger Layer + PageFlip",
             samplingIntervalMs = 250,
-            avgFps = 118.4f,
-            minFps = 106,
-            maxFps = 120,
-            onePercentLowFps = 111,
-            pointOnePercentLowFps = 107,
-            avgFrameTimeMs = 8.44f,
-            stabilityPercent = 97,
-            jankFrameCount = 3,
-            peakCpuTempC = 41.8f,
-            peakBatteryTempC = 37.5f,
-            avgGpuLoadPercent = 84,
-            fpsSamples = listOf(119, 120, 118, 117, 120, 115, 118, 120, 119, 116, 120, 119, 118, 120, 119, 120)
+            avgFps = 51.1f,
+            minFps = 0.0f,
+            maxFps = 119.9f,
+            varianceFps = 1669.6f,
+            relativeSmoothness = 0.0f,
+            fivePercentLowFps = 0.0f,
+            onePercentLowFps = 14,
+            pointOnePercentLowFps = 0,
+            avgFrameTimeMs = 19.56f,
+            stabilityPercent = 82,
+            jankFrameCount = 4,
+            peakCpuTempC = 44.0f,
+            peakBatteryTempC = 35.0f,
+            avgGpuLoadPercent = 16,
+            avgPowerWatt = 0.4f,
+            resolution = "1220x2712(?)",
+            fpsSamples = listOf(0, 65, 119, 72, 72, 42, 18, 6, 38, 72),
+            fpsFloatSamples = listOf(0f, 65.2f, 119.9f, 72.0f, 72.0f, 41.5f, 18.2f, 5.8f, 38.4f, 72.0f),
+            frametimeSamples = listOf(14f, 12f, 8.3f, 13.8f, 13.8f, 28f, 52f, 217f, 112f, 14f),
+            cpuTempSamples = listOf(45f, 45f, 46f, 47f, 46f, 44f, 43f, 43f, 44f, 44f),
+            cpuCluster0UsageSamples = listOf(80, 82, 84, 80, 82, 74, 65, 51, 66, 80),
+            cpuCluster3UsageSamples = listOf(8, 17, 27, 25, 9, 10, 11, 11, 13, 15),
+            cpuTotalUsageSamples = listOf(35, 40, 45, 45, 36, 33, 30, 26, 31, 38),
+            cpuCluster0FreqSamples = listOf(1690, 1520, 1350, 1901, 1480, 1120, 1901, 1450, 1120, 1120),
+            cpuCluster3FreqSamples = listOf(1280, 1340, 1400, 1840, 1320, 780, 780, 780, 780, 780),
+            cpuCluster7FreqSamples = listOf(1220, 1220, 1220, 1220, 1220, 1220, 1220, 1220, 1220, 1220),
+            gpuFreqSamples = listOf(255, 580, 900, 500, 500, 380, 255, 255, 370, 500),
+            gpuLoadSamples = listOf(0, 5, 9, 16, 9, 3, 3, 2, 0, 3),
+            gpuTempSamples = listOf(45f, 45.5f, 46f, 47f, 46.5f, 45f, 42f, 41.5f, 42f, 43f),
+            appRamUsageMbSamples = listOf(245, 247, 249, 249, 248, 248, 248, 248, 248, 248),
+            deviceRamUsedMbSamples = listOf(4300, 4310, 4319, 4315, 4305, 4298, 4302, 4310, 4308, 4304),
+            deviceSwapUsedMbSamples = listOf(2020, 2020, 2020, 2020, 2020, 2020, 2020, 2020, 2020, 2020),
+            powerWattSamples = listOf(0.12f, 0.55f, 1.0f, 1.0f, 0.65f, 0.34f, 0.14f, 0.08f, 0.10f, 0.14f),
+            batteryTempSamples = listOf(35f, 35f, 35f, 35f, 35f, 35f, 35f, 35f, 35f, 35f),
+            batteryLevelSamples = listOf(100, 100, 100, 100, 100, 100, 100, 100, 100, 100)
         ),
         FpsRecordedSession(
             id = "fps_session_2",
@@ -288,10 +346,13 @@ data class FpsRecorderConfig(
             timestamp = System.currentTimeMillis() - 5400_000L,
             durationSec = 180,
             captureSource = "SurfaceFlinger PageFlip",
-            samplingIntervalMs = 100,
+            samplingIntervalMs = 250,
             avgFps = 116.8f,
-            minFps = 98,
-            maxFps = 120,
+            minFps = 98.0f,
+            maxFps = 120.0f,
+            varianceFps = 28.4f,
+            relativeSmoothness = 94.8f,
+            fivePercentLowFps = 104.0f,
             onePercentLowFps = 104,
             pointOnePercentLowFps = 99,
             avgFrameTimeMs = 8.56f,
@@ -300,7 +361,27 @@ data class FpsRecorderConfig(
             peakCpuTempC = 43.1f,
             peakBatteryTempC = 38.4f,
             avgGpuLoadPercent = 89,
-            fpsSamples = listOf(118, 117, 115, 120, 112, 116, 118, 119, 114, 117, 120, 116, 115, 118, 119, 117)
+            avgPowerWatt = 4.6f,
+            resolution = "1220x2712(?)",
+            fpsSamples = listOf(118, 117, 115, 120, 112, 116, 118, 119, 114, 117, 120, 116),
+            fpsFloatSamples = listOf(118f, 117f, 115f, 120f, 112f, 116f, 118f, 119f, 114f, 117f, 120f, 116f),
+            frametimeSamples = listOf(8.5f, 8.6f, 8.7f, 8.3f, 8.9f, 8.6f, 8.5f, 8.4f, 8.8f, 8.5f, 8.3f, 8.6f),
+            cpuTempSamples = listOf(41f, 41.5f, 42f, 42.4f, 43.1f, 42.8f, 42.5f, 42.2f, 42.9f, 43.0f, 42.7f, 42.6f),
+            cpuCluster0UsageSamples = listOf(64, 68, 72, 70, 75, 71, 69, 67, 74, 72, 68, 70),
+            cpuCluster3UsageSamples = listOf(52, 58, 61, 55, 66, 60, 57, 54, 63, 59, 56, 58),
+            cpuTotalUsageSamples = listOf(58, 63, 66, 62, 70, 65, 63, 60, 68, 65, 62, 64),
+            cpuCluster0FreqSamples = listOf(1843, 1843, 1958, 1958, 1958, 1843, 1843, 1843, 1958, 1843, 1843, 1843),
+            cpuCluster3FreqSamples = listOf(2150, 2150, 2496, 2150, 2496, 2150, 2150, 2150, 2496, 2150, 2150, 2150),
+            cpuCluster7FreqSamples = listOf(2496, 2496, 2803, 2496, 2803, 2496, 2496, 2496, 2803, 2496, 2496, 2496),
+            gpuFreqSamples = listOf(750, 800, 850, 800, 900, 850, 800, 750, 850, 800, 750, 800),
+            gpuLoadSamples = listOf(84, 88, 91, 86, 94, 89, 87, 85, 92, 88, 86, 89),
+            gpuTempSamples = listOf(40f, 41f, 42f, 41.5f, 43f, 42.5f, 42f, 41.5f, 42.8f, 42.2f, 41.8f, 42.0f),
+            appRamUsageMbSamples = listOf(1840, 1865, 1890, 1910, 1925, 1930, 1935, 1940, 1945, 1950, 1948, 1952),
+            deviceRamUsedMbSamples = listOf(6420, 6480, 6510, 6540, 6590, 6580, 6570, 6590, 6610, 6600, 6595, 6605),
+            deviceSwapUsedMbSamples = listOf(2140, 2140, 2150, 2150, 2160, 2160, 2160, 2160, 2165, 2165, 2165, 2165),
+            powerWattSamples = listOf(4.2f, 4.5f, 4.8f, 4.4f, 5.1f, 4.7f, 4.5f, 4.3f, 4.9f, 4.6f, 4.4f, 4.5f),
+            batteryTempSamples = listOf(37.5f, 37.6f, 37.8f, 37.9f, 38.1f, 38.2f, 38.2f, 38.3f, 38.4f, 38.4f, 38.4f, 38.4f),
+            batteryLevelSamples = listOf(94, 94, 94, 93, 93, 93, 93, 92, 92, 92, 92, 92)
         )
     ),
     val lastActionFeedback: String? = null
@@ -395,6 +476,11 @@ enum class SurfaceThemeMode(
         title = "Midnight Nebula",
         subtitle = "Synthwave #07030D deep ultraviolet cyber-deck surface",
         hexCode = "#07030D"
+    ),
+    IOS_LIQUID_GLASS(
+        title = "iOS Liquid Glass (Frosted Ice)",
+        subtitle = "Translucent frosted ice crystal glass with sub-zero glacial refraction",
+        hexCode = "#081426"
     )
 }
 
@@ -419,6 +505,17 @@ enum class GamingThemePreset(
         borderGlow = 0.65f,
         headerGlow = 0.25f,
         cornerRadiusDp = 18
+    ),
+    IOS_LIQUID_GLASS(
+        title = "iOS Liquid Glass",
+        badge = "FROSTED ICE",
+        description = "Translucent frosted ice crystal cards, sub-zero glacial glow & specular frost rim",
+        primaryAccentIndex = 1,
+        secondaryAccentIndex = 9,
+        surfaceMode = SurfaceThemeMode.IOS_LIQUID_GLASS,
+        borderGlow = 0.88f,
+        headerGlow = 0.36f,
+        cornerRadiusDp = 24
     ),
     CYBERPUNK_2077(
         title = "Cyberpunk Night City",
@@ -501,6 +598,10 @@ data class ThemeCustomizationConfig(
     val headerGlowIntensity: Float = 0.25f, // 0.05f .. 0.50f
     val cornerRadiusDp: Int = 18, // 8, 14, 18, 24
     val useDynamicColor: Boolean = false,
+    val isLiquidGlassEnabled: Boolean = false,
+    val liquidGlassOpacity: Float = 0.28f, // 0.12f .. 0.65f
+    val liquidGlassRefraction: Float = 0.85f, // 0.20f .. 1.0f
+    val liquidGlassWallpaperTint: String = "Frosted Ice", // Frosted Ice, Glacial Cyan, Polar Aurora, Deep Permafrost, Diamond Frost
     val activePresetName: String = "ROG Crimson Core",
     val savedCustomPalettes: List<CustomColorPalette> = listOf(
         CustomColorPalette(

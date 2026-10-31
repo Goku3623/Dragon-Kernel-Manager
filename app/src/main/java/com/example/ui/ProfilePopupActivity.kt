@@ -35,6 +35,8 @@ class ProfilePopupActivity : ComponentActivity() {
             val liveCpuTemp by repository.cpuTempFlow.collectAsState()
             val gpuConfig by repository.gpuConfigFlow.collectAsState()
             val themeConfig by repository.themeConfigFlow.collectAsState()
+            val isRecordingFps by repository.isRecordingFpsFlow.collectAsState()
+            val fpsRecorderConfig by repository.fpsRecorderConfigFlow.collectAsState()
 
             DragonKernelTheme(
                 accentIndex = accentIndex,
@@ -61,6 +63,11 @@ class ProfilePopupActivity : ComponentActivity() {
                         liveFps = liveFps,
                         liveCpuTemp = liveCpuTemp,
                         liveGpuMhz = gpuConfig.curFreqMhz,
+                        isRecordingFps = isRecordingFps,
+                        elapsedRecordingSec = fpsRecorderConfig.elapsedRecordingSec,
+                        onToggleFpsRecord = {
+                            repository.toggleFpsRecording()
+                        },
                         onSelectProfile = { profile ->
                             repository.setBatteryProfile(profile)
                             Toast.makeText(this@ProfilePopupActivity, "HUD Mode: ${profile.title}", Toast.LENGTH_SHORT).show()
