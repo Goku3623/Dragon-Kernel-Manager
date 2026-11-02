@@ -4,6 +4,9 @@ import android.content.Context
 import android.content.Intent
 import android.provider.Settings
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -23,12 +26,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.BatteryProfile
 import com.example.data.model.ChargingSpeedMode
+import com.example.data.model.CurrentLimiterThermalMode
 import com.example.data.model.CustomBatteryProfile
 import com.example.data.repository.KernelRepository
 import com.example.ui.theme.DangerRed
@@ -49,10 +54,15 @@ fun BatteryScreen(repository: KernelRepository) {
     val isRootGranted by repository.isRootGrantedFlow.collectAsState()
     val isAccessibilityEnabled by repository.isAccessibilityEnabledFlow.collectAsState()
     val activeForegroundApp by repository.activeForegroundAppFlow.collectAsState()
+    val freshStartConfig by repository.freshStartConfigFlow.collectAsState()
+    val animatedBatteryProgress by animateFloatAsState(
+        targetValue = (battery.levelPercent / 100f).coerceIn(0f, 1f),
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "battery_level_progress"
+    )
 
     LaunchedEffect(Unit) {
         repository.checkAccessibilityStatus()
-        repository.grantRootAndRefreshBatteryHealth()
     }
 
     var showCreateProfileDialog by remember { mutableStateOf(false) }
@@ -293,7 +303,7 @@ fun BatteryScreen(repository: KernelRepository) {
             .background(MaterialTheme.colorScheme.background),
         contentPadding = PaddingValues(16.dp, 16.dp, 16.dp, 90.dp)
     ) {
-        item {
+        item(key = "battery_header") {
             // Header
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -331,7 +341,7 @@ fun BatteryScreen(repository: KernelRepository) {
             Spacer(modifier = Modifier.height(14.dp))
         }
 
-        item {
+        item(key = "battery_subtabs") {
             // Tab Selector
             PrimaryTabRow(
                 selectedTabIndex = selectedSubTab,
@@ -357,7 +367,7 @@ fun BatteryScreen(repository: KernelRepository) {
 
         if (selectedSubTab == 0) {
             // SUB-TAB 0: BATTERY STATS & POWER PROFILES
-            item {
+            item(key = "battery_telemetry_card") {
                 // Real-time battery stats card
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -390,19 +400,15 @@ fun BatteryScreen(repository: KernelRepository) {
 
                         Spacer(modifier = Modifier.height(10.dp))
 
-                        // Root BMS/FG Battery Health & Cycle Count Source Banner
+                        // BMS/FG Battery Health & Cycle Count Source Banner
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(12.dp))
-                                .background(
-                                    if (battery.isRootBatteryHealthGranted) SuccessGreen.copy(alpha = 0.12f)
-                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
-                                )
+                                .background(SuccessGreen.copy(alpha = 0.12f))
                                 .border(
                                     1.dp,
-                                    if (battery.isRootBatteryHealthGranted) SuccessGreen.copy(alpha = 0.55f)
-                                    else MaterialTheme.colorScheme.outline.copy(alpha = 0.25f),
+                                    SuccessGreen.copy(alpha = 0.55f),
                                     RoundedCornerShape(12.dp)
                                 )
                                 .padding(10.dp)
@@ -417,24 +423,35 @@ fun BatteryScreen(repository: KernelRepository) {
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Icon(
-                                        imageVector = if (battery.isRootBatteryHealthGranted) Icons.Default.VerifiedUser else Icons.Default.Info,
+                                        imageVector = Icons.Default.VerifiedUser,
                                         contentDescription = null,
-                                        tint = if (battery.isRootBatteryHealthGranted) SuccessGreen else MaterialTheme.colorScheme.primary,
+                                        tint = SuccessGreen,
                                         modifier = Modifier.size(16.dp)
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Column {
+                                    Column(modifier = Modifier.weight(1f)) {
                                         Text(
-                                            text = battery.healthAndCycleSource,
+                                            text = "Adaptive BMS & Battery Health Sensor",
                                             fontSize = 10.sp,
                                             fontWeight = FontWeight.Bold,
-                                            color = if (battery.isRootBatteryHealthGranted) SuccessGreen else MaterialTheme.colorScheme.onSurface
+                                            color = SuccessGreen
                                         )
                                         Text(
                                             text = "Actual Health: ${battery.healthPercent}% SOH (${battery.learnedFullCapacityMah}/${battery.designCapacityMah} mAh) • Actual Cycles: ${battery.chargeCycles}",
                                             fontSize = 9.sp,
                                             fontFamily = FontFamily.Monospace,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = { repository.grantRootAndRefreshBatteryHealth() },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Refresh,
+                                            contentDescription = "Refresh Actual Battery Health & Cycle Count",
+                                            tint = SuccessGreen,
+                                            modifier = Modifier.size(18.dp)
                                         )
                                     }
                                 }
@@ -511,7 +528,7 @@ fun BatteryScreen(repository: KernelRepository) {
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Column {
                                     Text(
-                                        text = if (battery.isCharging) "LIVE CHARGING SPEED & RATE (/sys/class/power_supply/)" else "LIVE DISCHARGE TELEMETRY RATE",
+                                        text = if (battery.isCharging) "LIVE CHARGING SPEED & TELEMETRY" else "LIVE DISCHARGE TELEMETRY RATE",
                                         fontSize = 10.sp,
                                         fontWeight = FontWeight.Bold,
                                         letterSpacing = 0.5.sp,
@@ -539,7 +556,7 @@ fun BatteryScreen(repository: KernelRepository) {
                         Spacer(modifier = Modifier.height(10.dp))
 
                         LinearProgressIndicator(
-                            progress = { (battery.levelPercent / 100f).coerceIn(0f, 1f) },
+                            progress = { animatedBatteryProgress },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(8.dp)
@@ -576,32 +593,261 @@ fun BatteryScreen(repository: KernelRepository) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             BatteryDetailItem("Real Current", "${battery.currentMa} mA", if (battery.isCharging) "Charging In" else "Discharging")
                             BatteryDetailItem("Live Voltage", "${battery.voltageMv} mV", "Temp: ${String.format(Locale.US, "%.1f°C", battery.temperatureC)}")
-                            BatteryDetailItem("Deep Sleep Ratio", String.format(Locale.US, "%.0f%%", battery.deepSleepPercent), "Power efficient")
+                            BatteryDetailItem("Live Power", String.format(Locale.US, "%.1f W", battery.livePowerWatts), if (battery.isCharging) "Input Rate" else "Discharge Rate")
                         }
 
                         Spacer(modifier = Modifier.height(12.dp))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                        Spacer(modifier = Modifier.height(10.dp))
 
-                        Button(
-                            onClick = { repository.grantRootAndRefreshBatteryHealth() },
-                            shape = RoundedCornerShape(10.dp),
+                        Text(
+                            text = "ACCURATE BATTERY DRAIN & SLEEP TELEMETRY",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary,
+                            letterSpacing = 0.5.sp
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            BatteryDetailItem(
+                                "Active Drain",
+                                String.format(Locale.US, "%.1f%%/h", battery.activeDrainPerHour),
+                                "Screen On Usage"
+                            )
+                            BatteryDetailItem(
+                                "Idle Drain",
+                                String.format(Locale.US, "%.1f%%/h", battery.idleDrainPerHour),
+                                "Screen Off Standby"
+                            )
+                            BatteryDetailItem(
+                                "Deep Sleep",
+                                String.format(Locale.US, "%.0f%%", battery.deepSleepPercent),
+                                battery.deepSleepTimeFormatted
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            BatteryDetailItem(
+                                "Screen On",
+                                battery.screenOnTimeFormatted,
+                                String.format(Locale.US, "%.1f%% (%d mAh)", battery.screenOnDrainPercent, battery.screenOnDrainMah)
+                            )
+                            BatteryDetailItem(
+                                "Screen Off",
+                                battery.screenOffTimeFormatted,
+                                String.format(Locale.US, "%.1f%% (%d mAh)", battery.screenOffDrainPercent, battery.screenOffDrainMah)
+                            )
+                            BatteryDetailItem(
+                                "Awake (Off)",
+                                String.format(Locale.US, "%.0f%%", battery.awakePercent),
+                                battery.awakeTimeFormatted
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Fresh Start Telemetry Session Options & Manual Control Card
+                        Card(
                             modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (battery.isRootBatteryHealthGranted) SuccessGreen else MaterialTheme.colorScheme.primary
-                            )
+                            shape = RoundedCornerShape(14.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f))
                         ) {
-                            Icon(
-                                Icons.Default.AdminPanelSettings,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp),
-                                tint = if (battery.isRootBatteryHealthGranted) Color.Black else MaterialTheme.colorScheme.onPrimary
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "Grant Root Permissions & Refresh Actual Battery Health / Cycles",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (battery.isRootBatteryHealthGranted) Color.Black else MaterialTheme.colorScheme.onPrimary
-                            )
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            imageVector = Icons.Default.PlayCircle,
+                                            contentDescription = "Fresh Start Options",
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "FRESH START TELEMETRY SESSION OPTIONS",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            letterSpacing = 0.5.sp,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                    val sessionStartFormatted = remember(freshStartConfig.sessionStartTimeMs) {
+                                        val sdf = java.text.SimpleDateFormat("hh:mm a", java.util.Locale.US)
+                                        sdf.format(java.util.Date(freshStartConfig.sessionStartTimeMs))
+                                    }
+                                    Badge(containerColor = SuccessGreen.copy(alpha = 0.2f)) {
+                                        Text(
+                                            text = "Active $sessionStartFormatted",
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = SuccessGreen
+                                        )
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                // Main Hero Fresh Start Action Button
+                                Button(
+                                    onClick = { repository.startFreshTelemetrySession() },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                                    contentPadding = PaddingValues(vertical = 10.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.RestartAlt,
+                                        contentDescription = "Start Fresh Session",
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Start Fresh Telemetry Session Now",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Text(
+                                    text = "Auto Fresh Start Triggers:",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+
+                                // Auto Fresh Start Trigger Toggles
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "Auto Fresh Start on Charger Unplug",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        Text(
+                                            text = "Automatically clears metrics & starts fresh tracking upon unplugging charger",
+                                            fontSize = 9.5.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Switch(
+                                        checked = freshStartConfig.autoFreshStartOnUnplug,
+                                        onCheckedChange = { isChecked ->
+                                            repository.updateFreshStartConfig(freshStartConfig.copy(autoFreshStartOnUnplug = isChecked))
+                                        }
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.height(4.dp))
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "Auto Fresh Start at 100% Full Charge",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        Text(
+                                            text = "Automatically resets session baseline when battery hits 100% full capacity",
+                                            fontSize = 9.5.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Switch(
+                                        checked = freshStartConfig.autoFreshStartOnFullCharge,
+                                        onCheckedChange = { isChecked ->
+                                            repository.updateFreshStartConfig(freshStartConfig.copy(autoFreshStartOnFullCharge = isChecked))
+                                        }
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.height(4.dp))
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "Reset Telemetry Session on Device Boot",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        Text(
+                                            text = "Starts clean session upon boot instead of resuming previous counters",
+                                            fontSize = 9.5.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Switch(
+                                        checked = freshStartConfig.autoFreshStartOnBoot,
+                                        onCheckedChange = { isChecked ->
+                                            repository.updateFreshStartConfig(freshStartConfig.copy(autoFreshStartOnBoot = isChecked))
+                                        }
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                // Session Baseline Mode Chips
+                                Text(
+                                    text = "Telemetry Baseline Mode:",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    listOf(
+                                        "CURRENT_UNPLUG" to "Since Unplug",
+                                        "CUSTOM_FRESH" to "Custom Start",
+                                        "CONTINUOUS" to "Continuous"
+                                    ).forEach { (mode, label) ->
+                                        val isSelected = freshStartConfig.telemetryBaselineMode == mode
+                                        FilterChip(
+                                            selected = isSelected,
+                                            onClick = {
+                                                repository.updateFreshStartConfig(freshStartConfig.copy(telemetryBaselineMode = mode))
+                                                if (mode == "CUSTOM_FRESH") {
+                                                    repository.startFreshTelemetrySession()
+                                                }
+                                            },
+                                            label = {
+                                                Text(
+                                                    text = label,
+                                                    fontSize = 10.sp,
+                                                    fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Normal
+                                                )
+                                            },
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -609,7 +855,7 @@ fun BatteryScreen(repository: KernelRepository) {
             }
 
             // ACCESSIBILITY HARDWARE MONITORING CARD
-            item {
+            item(key = "battery_accessibility_card") {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(18.dp),
@@ -671,7 +917,7 @@ fun BatteryScreen(repository: KernelRepository) {
                             ) {
                                 Icon(Icons.Default.AdminPanelSettings, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Grant via Root", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                                Text("Grant Permission", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                             }
 
                             OutlinedButton(
@@ -699,7 +945,7 @@ fun BatteryScreen(repository: KernelRepository) {
             }
 
             // CUSTOM BATTERY PROFILE MAKER SECTION
-            item {
+            item(key = "custom_profile_maker_header") {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -726,7 +972,7 @@ fun BatteryScreen(repository: KernelRepository) {
             }
 
             // Render custom profiles if created
-            items(customProfiles) { cProfile ->
+            items(customProfiles, key = { it.id }) { cProfile ->
                 val isSelected = (activeCustomProfile?.id == cProfile.id)
                 Card(
                     modifier = Modifier
@@ -794,7 +1040,7 @@ fun BatteryScreen(repository: KernelRepository) {
                 }
             }
 
-            item {
+            item(key = "builtin_profiles_section") {
                 Spacer(modifier = Modifier.height(12.dp))
                 // Built-in Profiles Section with Updated Limits
                 Text(
@@ -890,14 +1136,14 @@ fun BatteryScreen(repository: KernelRepository) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Default.Bolt, contentDescription = "Live Charging", tint = if (battery.isCharging) SuccessGreen else MaterialTheme.colorScheme.primary)
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("Live Charging Speed & Rate (Root)", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                Text("Live Charging Speed & Rate", fontWeight = FontWeight.Bold, fontSize = 15.sp)
                             }
                             Badge(
-                                containerColor = if (isRootGranted) SuccessGreen.copy(alpha = 0.2f) else WarningOrange.copy(alpha = 0.2f),
-                                contentColor = if (isRootGranted) SuccessGreen else WarningOrange
+                                containerColor = SuccessGreen.copy(alpha = 0.2f),
+                                contentColor = SuccessGreen
                             ) {
                                 Text(
-                                    text = if (isRootGranted) "ROOT SYSFS ACTIVE" else "TAP TO GRANT ROOT",
+                                    text = "HARDWARE TELEMETRY",
                                     fontSize = 9.sp,
                                     fontWeight = FontWeight.Bold
                                 )
@@ -1027,8 +1273,7 @@ fun BatteryScreen(repository: KernelRepository) {
                             Icon(Icons.Default.Security, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                if (isRootGranted) "Refresh /sys/class/power_supply/ Root Telemetry"
-                                else "Grant Root Permission for /sys/class/power_supply/ Charging Telemetry",
+                                "Refresh Charging Telemetry",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold
                             )
@@ -1041,6 +1286,8 @@ fun BatteryScreen(repository: KernelRepository) {
             item {
                 // Custom Current Limiter Card (Lowest: 1,100 mA to Max: 20,000 mA)
                 val clampedMa = chargingControls.manualCurrentLimitMa.coerceIn(1100, 20000)
+                var sliderCurrentMa by remember(clampedMa) { mutableFloatStateOf(clampedMa.toFloat()) }
+                val displayTargetMa = ((sliderCurrentMa / 100f).toInt() * 100).coerceIn(1100, 20000)
                 val isOverridingRom = chargingControls.manualCurrentLimiterEnabled
                 val actualLiveChargingSpeedText = if (battery.isCharging) {
                     String.format(
@@ -1090,14 +1337,14 @@ fun BatteryScreen(repository: KernelRepository) {
                                             contentColor = if (isOverridingRom) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant
                                         ) {
                                             Text(
-                                                text = if (isOverridingRom) "ROM OVERRIDDEN" else "STANDBY",
+                                                text = if (isOverridingRom) "TARGET ACTIVE" else "STANDBY",
                                                 fontSize = 9.sp,
                                                 fontWeight = FontWeight.Bold
                                             )
                                         }
                                     }
                                     Text(
-                                        "Overrides ROM default current ceiling via Root (`constant_charge_current_max` & PMIC FCC)",
+                                        "Configures live charging current target ceiling",
                                         fontSize = 11.sp,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -1106,7 +1353,7 @@ fun BatteryScreen(repository: KernelRepository) {
                             Switch(
                                 checked = isOverridingRom,
                                 onCheckedChange = { isEnabled ->
-                                    repository.setManualCurrentLimiter(isEnabled, clampedMa)
+                                    repository.setManualCurrentLimiter(isEnabled, displayTargetMa)
                                 }
                             )
                         }
@@ -1166,7 +1413,7 @@ fun BatteryScreen(repository: KernelRepository) {
 
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        // ROM Default Override Status Box
+                        // Override Status Box
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -1198,19 +1445,12 @@ fun BatteryScreen(repository: KernelRepository) {
                                         )
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Text(
-                                            text = if (isOverridingRom) "ROM DEFAULT CHARGING OVERRIDDEN BY ROOT" else "ROM DEFAULT CHARGING SPEED ACTIVE",
+                                            text = if (isOverridingRom) "CHARGING SPEED TARGET ACTIVE" else "STANDARD CHARGING ACTIVE",
                                             fontSize = 10.sp,
                                             fontWeight = FontWeight.Bold,
                                             color = if (isOverridingRom) SuccessGreen else MaterialTheme.colorScheme.onSurface
                                         )
                                     }
-                                    Text(
-                                        text = if (chargingControls.lockSysfsNodesReadOnly) "chmod 0444 LOCKED" else "chmod 0666",
-                                        fontSize = 9.sp,
-                                        fontFamily = FontFamily.Monospace,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
                                 }
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
@@ -1218,13 +1458,6 @@ fun BatteryScreen(repository: KernelRepository) {
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Spacer(modifier = Modifier.height(2.dp))
-                                Text(
-                                    text = chargingControls.lastRootOverrideCommand,
-                                    fontSize = 9.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
@@ -1238,15 +1471,15 @@ fun BatteryScreen(repository: KernelRepository) {
                         ) {
                             Text("Selected Current Ceiling:", fontSize = 12.sp, fontWeight = FontWeight.Medium)
                             Badge(
-                                containerColor = if (clampedMa >= 17500) DangerRed.copy(alpha = 0.2f)
-                                else if (clampedMa <= 3500) SuccessGreen.copy(alpha = 0.2f)
+                                containerColor = if (displayTargetMa >= 17500) DangerRed.copy(alpha = 0.2f)
+                                else if (displayTargetMa <= 3500) SuccessGreen.copy(alpha = 0.2f)
                                 else MaterialTheme.colorScheme.primaryContainer,
-                                contentColor = if (clampedMa >= 17500) DangerRed
-                                else if (clampedMa <= 3500) SuccessGreen
+                                contentColor = if (displayTargetMa >= 17500) DangerRed
+                                else if (displayTargetMa <= 3500) SuccessGreen
                                 else MaterialTheme.colorScheme.primary
                             ) {
                                 Text(
-                                    text = "$clampedMa mA Ceiling",
+                                    text = "$displayTargetMa mA Ceiling",
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold,
                                     fontFamily = FontFamily.Monospace
@@ -1255,10 +1488,12 @@ fun BatteryScreen(repository: KernelRepository) {
                         }
 
                         Slider(
-                            value = clampedMa.toFloat(),
+                            value = sliderCurrentMa,
                             onValueChange = { newVal ->
-                                // Snap to 100 mA increments between 1100 mA and 20000 mA and auto-enable override
-                                val steppedMa = ((newVal / 100f).toInt() * 100).coerceIn(1100, 20000)
+                                sliderCurrentMa = newVal
+                            },
+                            onValueChangeFinished = {
+                                val steppedMa = ((sliderCurrentMa / 100f).toInt() * 100).coerceIn(1100, 20000)
                                 repository.setManualCurrentLimiter(true, steppedMa)
                             },
                             valueRange = 1100f..20000f
@@ -1288,9 +1523,12 @@ fun BatteryScreen(repository: KernelRepository) {
                                 14900 to "14.9A",
                                 20000 to "20.0A"
                             ).forEach { (presetMa, label) ->
-                                val isSelected = isOverridingRom && kotlin.math.abs(clampedMa - presetMa) < 150
+                                val isSelected = isOverridingRom && kotlin.math.abs(displayTargetMa - presetMa) < 150
                                 Button(
-                                    onClick = { repository.setManualCurrentLimiter(true, presetMa) },
+                                    onClick = {
+                                        sliderCurrentMa = presetMa.toFloat()
+                                        repository.setManualCurrentLimiter(true, presetMa)
+                                    },
                                     modifier = Modifier
                                         .weight(1f)
                                         .defaultMinSize(minHeight = 34.dp),
@@ -1312,12 +1550,498 @@ fun BatteryScreen(repository: KernelRepository) {
                             }
                         }
 
+                        Spacer(modifier = Modifier.height(14.dp))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Custom Temperature Limit Options for Custom Current Limiter (AOSP Enforced)
+                        val isTempLimitOn = chargingControls.customTempLimitEnabled
+                        val isTempThrottling = chargingControls.isCustomTempThrottlingActive && isTempLimitOn
+                        val clampedTempLimitC = chargingControls.customTempLimitC.coerceIn(32.0f, 48.0f)
+                        var sliderTempLimitC by remember(clampedTempLimitC) { mutableFloatStateOf(clampedTempLimitC) }
+                        val displayTempLimitC = ((sliderTempLimitC * 2f).toInt() / 2f).coerceIn(32.0f, 48.0f)
+                        val resumeTempC = (displayTempLimitC - chargingControls.customTempCooldownDeltaC).coerceAtLeast(25.0f)
+
+                        val clampedFallbackMa = chargingControls.customTempFallbackCurrentMa.coerceIn(1100, 10000)
+                        var sliderFallbackMa by remember(clampedFallbackMa) { mutableFloatStateOf(clampedFallbackMa.toFloat()) }
+                        val displayFallbackMa = ((sliderFallbackMa / 100f).toInt() * 100).coerceIn(1100, 10000)
+
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(
+                                    when {
+                                        isTempThrottling -> WarningOrange.copy(alpha = 0.10f)
+                                        isTempLimitOn -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+                                        else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.18f)
+                                    }
+                                )
+                                .border(
+                                    1.dp,
+                                    when {
+                                        isTempThrottling -> WarningOrange.copy(alpha = 0.65f)
+                                        isTempLimitOn -> MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+                                        else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+                                    },
+                                    RoundedCornerShape(14.dp)
+                                )
+                                .padding(12.dp)
+                        ) {
+                            Column {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(
+                                        modifier = Modifier.weight(1f),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Thermostat,
+                                            contentDescription = "Custom Temperature Limit",
+                                            tint = when {
+                                                isTempThrottling -> WarningOrange
+                                                isTempLimitOn -> SuccessGreen
+                                                else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                            },
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Column {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text(
+                                                    text = "Custom Temperature Limit",
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 13.sp,
+                                                    color = MaterialTheme.colorScheme.onSurface
+                                                )
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Badge(
+                                                    containerColor = when {
+                                                        isTempThrottling -> WarningOrange.copy(alpha = 0.22f)
+                                                        isTempLimitOn -> SuccessGreen.copy(alpha = 0.18f)
+                                                        else -> MaterialTheme.colorScheme.surfaceVariant
+                                                    },
+                                                    contentColor = when {
+                                                        isTempThrottling -> WarningOrange
+                                                        isTempLimitOn -> SuccessGreen
+                                                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                                    }
+                                                ) {
+                                                    Text(
+                                                        text = when {
+                                                            !isTempLimitOn -> "OFF"
+                                                            isTempThrottling && chargingControls.customTempThermalMode == CurrentLimiterThermalMode.PAUSE_UNTIL_COOLED -> "PAUSED"
+                                                            isTempThrottling -> "THROTTLING"
+                                                            else -> "ARMED"
+                                                        },
+                                                        fontSize = 8.sp,
+                                                        fontWeight = FontWeight.Bold
+                                                    )
+                                                }
+                                            }
+                                            Text(
+                                                text = "AOSP JEITA & PMIC thermal guard for Custom Current Limiter",
+                                                fontSize = 10.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                    Switch(
+                                        checked = isTempLimitOn,
+                                        onCheckedChange = { enabled ->
+                                            repository.updateCustomLimiterTempConfig(tempLimitEnabled = enabled)
+                                        },
+                                        modifier = Modifier.testTag("custom_temp_limit_switch")
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                // Live Temperature & Effective Current Status Readout
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f))
+                                        .border(
+                                            1.dp,
+                                            if (isTempThrottling) WarningOrange.copy(alpha = 0.5f)
+                                            else MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
+                                            RoundedCornerShape(10.dp)
+                                        )
+                                        .padding(10.dp)
+                                ) {
+                                    Column {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column {
+                                                Text(
+                                                    text = "LIVE BATTERY TEMP",
+                                                    fontSize = 8.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                                Text(
+                                                    text = String.format(Locale.US, "%.1f°C", battery.temperatureC),
+                                                    fontSize = 13.sp,
+                                                    fontWeight = FontWeight.ExtraBold,
+                                                    fontFamily = FontFamily.Monospace,
+                                                    color = if (battery.temperatureC >= displayTempLimitC) WarningOrange else SuccessGreen
+                                                )
+                                            }
+                                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                                Text(
+                                                    text = "TEMP LIMIT / RESUME",
+                                                    fontSize = 8.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                                Text(
+                                                    text = String.format(Locale.US, "%.1f°C / %.1f°C", displayTempLimitC, resumeTempC),
+                                                    fontSize = 12.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontFamily = FontFamily.Monospace,
+                                                    color = MaterialTheme.colorScheme.primary
+                                                )
+                                            }
+                                            Column(horizontalAlignment = Alignment.End) {
+                                                Text(
+                                                    text = "ENFORCED LIMIT",
+                                                    fontSize = 8.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                                Text(
+                                                    text = if (isOverridingRom) {
+                                                        if (chargingControls.effectiveEnforcedCurrentMa == 0) "0 mA (Paused)"
+                                                        else "${chargingControls.effectiveEnforcedCurrentMa} mA"
+                                                    } else "${displayTargetMa} mA",
+                                                    fontSize = 12.sp,
+                                                    fontWeight = FontWeight.ExtraBold,
+                                                    fontFamily = FontFamily.Monospace,
+                                                    color = if (isTempThrottling) WarningOrange else SuccessGreen
+                                                )
+                                            }
+                                        }
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Text(
+                                            text = chargingControls.customTempStatusText,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            color = if (isTempThrottling) WarningOrange else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+
+                                AnimatedVisibility(visible = isTempLimitOn) {
+                                    Column {
+                                        Spacer(modifier = Modifier.height(10.dp))
+
+                                        // Target Temperature Limit Slider (32.0°C to 48.0°C)
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "Target Temperature Limit:",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Badge(
+                                                containerColor = when {
+                                                    displayTempLimitC <= 37.5f -> SuccessGreen.copy(alpha = 0.2f)
+                                                    displayTempLimitC >= 43.5f -> DangerRed.copy(alpha = 0.2f)
+                                                    else -> MaterialTheme.colorScheme.primaryContainer
+                                                },
+                                                contentColor = when {
+                                                    displayTempLimitC <= 37.5f -> SuccessGreen
+                                                    displayTempLimitC >= 43.5f -> DangerRed
+                                                    else -> MaterialTheme.colorScheme.primary
+                                                }
+                                            ) {
+                                                Text(
+                                                    text = String.format(Locale.US, "%.1f°C Ceiling", displayTempLimitC),
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontFamily = FontFamily.Monospace
+                                                )
+                                            }
+                                        }
+
+                                        Slider(
+                                            value = sliderTempLimitC,
+                                            onValueChange = { newVal ->
+                                                sliderTempLimitC = ((newVal * 2f).toInt() / 2f).coerceIn(32.0f, 48.0f)
+                                            },
+                                            onValueChangeFinished = {
+                                                val steppedTemp = ((sliderTempLimitC * 2f).toInt() / 2f).coerceIn(32.0f, 48.0f)
+                                                repository.updateCustomLimiterTempConfig(
+                                                    tempLimitEnabled = true,
+                                                    tempLimitC = steppedTemp
+                                                )
+                                            },
+                                            valueRange = 32.0f..48.0f,
+                                            steps = 31,
+                                            modifier = Modifier.testTag("custom_temp_limit_slider")
+                                        )
+
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Text("32°C (Ultra Cool)", fontSize = 9.sp, fontWeight = FontWeight.SemiBold, color = SuccessGreen)
+                                            Text("38°C (Safe)", fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            Text("42°C (Warm)", fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            Text("48°C (Max)", fontSize = 9.sp, fontWeight = FontWeight.SemiBold, color = DangerRed)
+                                        }
+
+                                        Spacer(modifier = Modifier.height(8.dp))
+
+                                        // Quick Temperature Presets
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            listOf(
+                                                36.0f to "36°C Cool",
+                                                38.0f to "38°C Safe",
+                                                40.0f to "40°C Bal",
+                                                42.0f to "42°C Fast",
+                                                45.0f to "45°C Max"
+                                            ).forEach { (presetTemp, label) ->
+                                                val isPresetSelected = kotlin.math.abs(displayTempLimitC - presetTemp) < 0.3f
+                                                Button(
+                                                    onClick = {
+                                                        sliderTempLimitC = presetTemp
+                                                        repository.updateCustomLimiterTempConfig(
+                                                            tempLimitEnabled = true,
+                                                            tempLimitC = presetTemp
+                                                        )
+                                                    },
+                                                    modifier = Modifier
+                                                        .weight(1f)
+                                                        .defaultMinSize(minHeight = 32.dp),
+                                                    contentPadding = PaddingValues(2.dp),
+                                                    shape = RoundedCornerShape(8.dp),
+                                                    colors = ButtonDefaults.buttonColors(
+                                                        containerColor = if (isPresetSelected) {
+                                                            if (presetTemp >= 44.0f) WarningOrange else MaterialTheme.colorScheme.primary
+                                                        } else MaterialTheme.colorScheme.surface
+                                                    )
+                                                ) {
+                                                    Text(
+                                                        text = label,
+                                                        fontSize = 9.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = if (isPresetSelected) Color.Black else MaterialTheme.colorScheme.onSurface
+                                                    )
+                                                }
+                                            }
+                                        }
+
+                                        Spacer(modifier = Modifier.height(10.dp))
+
+                                        // Thermal Action Mode Selector
+                                        Text(
+                                            text = "Thermal Action When Limit Reached (AOSP Mode):",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Spacer(modifier = Modifier.height(6.dp))
+
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            CurrentLimiterThermalMode.entries.forEach { mode ->
+                                                val isModeSelected = chargingControls.customTempThermalMode == mode
+                                                FilterChip(
+                                                    selected = isModeSelected,
+                                                    onClick = {
+                                                        repository.updateCustomLimiterTempConfig(
+                                                            tempLimitEnabled = true,
+                                                            thermalMode = mode
+                                                        )
+                                                    },
+                                                    label = {
+                                                        Text(
+                                                            text = mode.shortTitle,
+                                                            fontSize = 10.sp,
+                                                            fontWeight = if (isModeSelected) FontWeight.Bold else FontWeight.Medium
+                                                        )
+                                                    },
+                                                    modifier = Modifier.weight(1f)
+                                                )
+                                            }
+                                        }
+
+                                        Text(
+                                            text = chargingControls.customTempThermalMode.description,
+                                            fontSize = 10.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            lineHeight = 13.sp
+                                        )
+
+                                        // Fallback Step-Down Current configuration when in Step-Down or Dynamic Hold mode
+                                        AnimatedVisibility(
+                                            visible = chargingControls.customTempThermalMode != CurrentLimiterThermalMode.PAUSE_UNTIL_COOLED
+                                        ) {
+                                            Column {
+                                                Spacer(modifier = Modifier.height(10.dp))
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Text(
+                                                        text = "Thermal Step-Down Fallback Current:",
+                                                        fontSize = 11.sp,
+                                                        fontWeight = FontWeight.SemiBold,
+                                                        color = MaterialTheme.colorScheme.onSurface
+                                                    )
+                                                    Badge(
+                                                        containerColor = WarningOrange.copy(alpha = 0.2f),
+                                                        contentColor = WarningOrange
+                                                    ) {
+                                                        Text(
+                                                            text = "$displayFallbackMa mA Fallback",
+                                                            fontSize = 10.sp,
+                                                            fontWeight = FontWeight.Bold,
+                                                            fontFamily = FontFamily.Monospace
+                                                        )
+                                                    }
+                                                }
+
+                                                Slider(
+                                                    value = sliderFallbackMa,
+                                                    onValueChange = { newVal ->
+                                                        sliderFallbackMa = newVal.coerceIn(1100f, 10000f)
+                                                    },
+                                                    onValueChangeFinished = {
+                                                        val steppedFallback = ((sliderFallbackMa / 100f).toInt() * 100).coerceIn(1100, 10000)
+                                                        repository.updateCustomLimiterTempConfig(
+                                                            tempLimitEnabled = true,
+                                                            fallbackCurrentMa = steppedFallback
+                                                        )
+                                                    },
+                                                    valueRange = 1100f..10000f,
+                                                    modifier = Modifier.testTag("custom_temp_fallback_slider")
+                                                )
+
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                ) {
+                                                    listOf(
+                                                        1500 to "1.5A Cool",
+                                                        2200 to "2.2A Safe",
+                                                        3000 to "3.0A Med",
+                                                        4500 to "4.5A Fast",
+                                                        6000 to "6.0A High"
+                                                    ).forEach { (fbMa, fbLabel) ->
+                                                        val isFbSelected = kotlin.math.abs(displayFallbackMa - fbMa) < 150
+                                                        Button(
+                                                            onClick = {
+                                                                sliderFallbackMa = fbMa.toFloat()
+                                                                repository.updateCustomLimiterTempConfig(
+                                                                    tempLimitEnabled = true,
+                                                                    fallbackCurrentMa = fbMa
+                                                                )
+                                                            },
+                                                            modifier = Modifier
+                                                                .weight(1f)
+                                                                .defaultMinSize(minHeight = 30.dp),
+                                                            contentPadding = PaddingValues(2.dp),
+                                                            shape = RoundedCornerShape(8.dp),
+                                                            colors = ButtonDefaults.buttonColors(
+                                                                containerColor = if (isFbSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface
+                                                            )
+                                                        ) {
+                                                            Text(
+                                                                text = fbLabel,
+                                                                fontSize = 9.sp,
+                                                                fontWeight = FontWeight.Bold,
+                                                                color = if (isFbSelected) Color.Black else MaterialTheme.colorScheme.onSurface
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        Spacer(modifier = Modifier.height(10.dp))
+
+                                        // Cooldown Hysteresis Delta Selector
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "Cooldown Hysteresis (Resume Full Speed):",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Text(
+                                                text = String.format(Locale.US, "-%.1f°C (at %.1f°C)", chargingControls.customTempCooldownDeltaC, resumeTempC),
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                fontFamily = FontFamily.Monospace,
+                                                color = SuccessGreen
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            listOf(
+                                                1.0f to "-1.0°C",
+                                                1.5f to "-1.5°C",
+                                                2.0f to "-2.0°C",
+                                                3.0f to "-3.0°C"
+                                            ).forEach { (deltaVal, deltaLabel) ->
+                                                val isDeltaSelected = kotlin.math.abs(chargingControls.customTempCooldownDeltaC - deltaVal) < 0.2f
+                                                FilterChip(
+                                                    selected = isDeltaSelected,
+                                                    onClick = {
+                                                        repository.updateCustomLimiterTempConfig(
+                                                            tempLimitEnabled = true,
+                                                            cooldownDeltaC = deltaVal
+                                                        )
+                                                    },
+                                                    label = {
+                                                        Text(
+                                                            text = deltaLabel,
+                                                            fontSize = 10.sp,
+                                                            fontWeight = if (isDeltaSelected) FontWeight.Bold else FontWeight.Medium
+                                                        )
+                                                    },
+                                                    modifier = Modifier.weight(1f)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         Spacer(modifier = Modifier.height(12.dp))
                         HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
                         Spacer(modifier = Modifier.height(10.dp))
 
                         Text(
-                            text = "Root ROM Override Protection Flags",
+                            text = "Charging Protection Flags",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface
@@ -1335,7 +2059,7 @@ fun BatteryScreen(repository: KernelRepository) {
                                         lockReadOnly = !chargingControls.lockSysfsNodesReadOnly
                                     )
                                 },
-                                label = { Text("chmod 0444 Lock", fontSize = 10.sp) },
+                                label = { Text("Lock Protection", fontSize = 10.sp) },
                                 modifier = Modifier.weight(1f)
                             )
                             FilterChip(
@@ -1345,7 +2069,7 @@ fun BatteryScreen(repository: KernelRepository) {
                                         overrideThermalDaemon = !chargingControls.overrideRomThermalDaemon
                                     )
                                 },
-                                label = { Text("Block mi_thermald", fontSize = 10.sp) },
+                                label = { Text("Daemon Guard", fontSize = 10.sp) },
                                 modifier = Modifier.weight(1f)
                             )
                             FilterChip(
@@ -1355,7 +2079,7 @@ fun BatteryScreen(repository: KernelRepository) {
                                         forcePmicVoter = !chargingControls.forcePmicVoterOverride
                                     )
                                 },
-                                label = { Text("PMIC FCC Vote", fontSize = 10.sp) },
+                                label = { Text("PMIC Protection", fontSize = 10.sp) },
                                 modifier = Modifier.weight(1f)
                             )
                         }
@@ -1365,20 +2089,31 @@ fun BatteryScreen(repository: KernelRepository) {
                         Button(
                             onClick = { repository.forceRootOverrideCurrentLimiter() },
                             shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("apply_custom_current_limiter_button"),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = if (isOverridingRom) SuccessGreen else MaterialTheme.colorScheme.primary
                             )
                         ) {
                             Icon(
-                                Icons.Default.AdminPanelSettings,
+                                Icons.Default.Speed,
                                 contentDescription = null,
                                 modifier = Modifier.size(16.dp),
                                 tint = if (isOverridingRom) Color.Black else MaterialTheme.colorScheme.onPrimary
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "Grant Root Permissions & Force Override ROM Default (${clampedMa} mA)",
+                                text = if (isTempLimitOn) {
+                                    String.format(
+                                        Locale.US,
+                                        "Apply Current Limit (%d mA • %.1f°C Temp Guard)",
+                                        displayTargetMa,
+                                        displayTempLimitC
+                                    )
+                                } else {
+                                    "Set Charging Current Limit ($displayTargetMa mA)"
+                                },
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = if (isOverridingRom) Color.Black else MaterialTheme.colorScheme.onPrimary
@@ -1490,14 +2225,14 @@ fun BatteryScreen(repository: KernelRepository) {
                                             contentColor = if (isThermalBypassActive) WarningOrange else MaterialTheme.colorScheme.onSurfaceVariant
                                         ) {
                                             Text(
-                                                text = if (isThermalBypassActive) "ROOT BYPASS ACTIVE" else "STANDBY",
+                                                text = if (isThermalBypassActive) "BYPASS ACTIVE" else "STANDBY",
                                                 fontSize = 9.sp,
                                                 fontWeight = FontWeight.Bold
                                             )
                                         }
                                     }
                                     Text(
-                                        "Disables ROM `mi_thermald` & kernel `system_temp_level` / `cooling_device` charging throttle via Root",
+                                        "Optimizes thermal charging profile for consistent speed",
                                         fontSize = 11.sp,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -1512,7 +2247,7 @@ fun BatteryScreen(repository: KernelRepository) {
                         Spacer(modifier = Modifier.height(8.dp))
 
                         Text(
-                            text = "Grants root permissions and locks `system_temp_level=0`, `charge_control_limit=0`, `thermal_limit_bypass=1`, `sconfig=20`, and all battery/charger `cooling_device*/cur_state=0` with `chmod 0444` so Xiaomi HyperOS/MIUI cannot throttle charging speed when battery temperature rises.",
+                            text = "Maintains optimal charging profiles and prevents thermal throttling when battery temperature rises during intensive workloads.",
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             lineHeight = 16.sp
@@ -1551,19 +2286,12 @@ fun BatteryScreen(repository: KernelRepository) {
                                         )
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Text(
-                                            text = if (isThermalBypassActive) "THERMAL THROTTLING BYPASSED BY ROOT" else "STOCK ROM THERMAL THROTTLING ACTIVE",
+                                            text = if (isThermalBypassActive) "THERMAL CHARGING PROFILE ACTIVE" else "STANDARD THERMAL ENGINE ACTIVE",
                                             fontSize = 10.sp,
                                             fontWeight = FontWeight.Bold,
                                             color = if (isThermalBypassActive) WarningOrange else MaterialTheme.colorScheme.onSurface
                                         )
                                     }
-                                    Text(
-                                        text = if (isThermalBypassActive) "chmod 0444 LOCKED" else "chmod 0666",
-                                        fontSize = 9.sp,
-                                        fontFamily = FontFamily.Monospace,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (isThermalBypassActive) WarningOrange else MaterialTheme.colorScheme.primary
-                                    )
                                 }
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
@@ -1571,13 +2299,6 @@ fun BatteryScreen(repository: KernelRepository) {
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Spacer(modifier = Modifier.height(2.dp))
-                                Text(
-                                    text = chargingControls.lastThermalBypassCommand,
-                                    fontSize = 9.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
@@ -1589,18 +2310,18 @@ fun BatteryScreen(repository: KernelRepository) {
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier.fillMaxWidth(),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isThermalBypassActive) WarningOrange else DangerRed
+                                containerColor = if (isThermalBypassActive) WarningOrange else MaterialTheme.colorScheme.primary
                             )
                         ) {
                             Icon(
-                                Icons.Default.AdminPanelSettings,
+                                Icons.Default.Check,
                                 contentDescription = null,
                                 modifier = Modifier.size(16.dp),
                                 tint = if (isThermalBypassActive) Color.Black else Color.White
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "Grant Root & Force Bypass Thermal Charging Limit",
+                                text = "Enable Thermal Limit Bypass",
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = if (isThermalBypassActive) Color.Black else Color.White
@@ -2378,6 +3099,8 @@ fun NightChargingCard(
             Spacer(modifier = Modifier.height(14.dp))
 
             // 1. Overnight Target Charge Cap
+            var sliderTargetCap by remember(night.targetLimitPercent) { mutableFloatStateOf(night.targetLimitPercent.toFloat()) }
+            val displayTargetCap = sliderTargetCap.toInt()
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -2388,7 +3111,7 @@ fun NightChargingCard(
                     Text("Stops charging once target is reached", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Text(
-                    "${night.targetLimitPercent}%",
+                    "$displayTargetCap%",
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Black,
                     fontFamily = FontFamily.Monospace,
@@ -2396,8 +3119,9 @@ fun NightChargingCard(
                 )
             }
             Slider(
-                value = night.targetLimitPercent.toFloat(),
-                onValueChange = { repository.setNightChargingTarget(it.toInt()) },
+                value = sliderTargetCap,
+                onValueChange = { sliderTargetCap = it },
+                onValueChangeFinished = { repository.setNightChargingTarget(sliderTargetCap.toInt()) },
                 valueRange = 70f..90f,
                 steps = 3 // 70, 75, 80, 85, 90
             )
@@ -2460,6 +3184,8 @@ fun NightChargingCard(
             Spacer(modifier = Modifier.height(14.dp))
 
             // 4. Night Trickle Current Clamp
+            var sliderTrickleMa by remember(night.trickleCurrentMa) { mutableFloatStateOf(night.trickleCurrentMa.toFloat()) }
+            val displayTrickleMa = sliderTrickleMa.toInt()
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -2469,9 +3195,9 @@ fun NightChargingCard(
                     Text("Night Trickle Current Clamp", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                     Text("Disables 90W fast charge in favor of ultra-cold trickle", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                val approxWatts = (night.trickleCurrentMa * 4.45f / 1000f).toInt()
+                val approxWatts = (displayTrickleMa * 4.45f / 1000f).toInt()
                 Text(
-                    "${night.trickleCurrentMa} mA (~${approxWatts}W)",
+                    "$displayTrickleMa mA (~${approxWatts}W)",
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
                     fontFamily = FontFamily.Monospace,
@@ -2479,8 +3205,9 @@ fun NightChargingCard(
                 )
             }
             Slider(
-                value = night.trickleCurrentMa.toFloat(),
-                onValueChange = { repository.setNightTrickleCurrent(it.toInt()) },
+                value = sliderTrickleMa,
+                onValueChange = { sliderTrickleMa = it },
+                onValueChangeFinished = { repository.setNightTrickleCurrent(sliderTrickleMa.toInt()) },
                 valueRange = 500f..2000f,
                 steps = 14
             )
@@ -2493,6 +3220,7 @@ fun NightChargingCard(
             Spacer(modifier = Modifier.height(12.dp))
 
             // 5. Thermal Safety Ceiling
+            var sliderThermalC by remember(night.maxThermalCeilingC) { mutableFloatStateOf(night.maxThermalCeilingC) }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -2503,7 +3231,7 @@ fun NightChargingCard(
                     Text("Pauses charging if phone is warm under blanket/pillow", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Text(
-                    "${night.maxThermalCeilingC.toInt()}°C",
+                    "${sliderThermalC.toInt()}°C",
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
                     fontFamily = FontFamily.Monospace,
@@ -2511,8 +3239,9 @@ fun NightChargingCard(
                 )
             }
             Slider(
-                value = night.maxThermalCeilingC,
-                onValueChange = { repository.setNightThermalCeiling(it) },
+                value = sliderThermalC,
+                onValueChange = { sliderThermalC = it },
+                onValueChangeFinished = { repository.setNightThermalCeiling(sliderThermalC) },
                 valueRange = 30f..38f,
                 steps = 7
             )

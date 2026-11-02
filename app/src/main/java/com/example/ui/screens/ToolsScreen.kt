@@ -155,11 +155,13 @@ fun ToolsScreen(repository: KernelRepository) {
                     var appSearchQuery by remember { mutableStateOf("") }
                     var filterSystem by remember { mutableStateOf(false) }
 
-                    val filteredApps = apps.filter {
-                        (if (filterSystem) it.isSystem else !it.isSystem) &&
-                                (it.appName.contains(appSearchQuery, ignoreCase = true) || it.packageName.contains(appSearchQuery, ignoreCase = true))
+                    val filteredApps = remember(apps, appSearchQuery, filterSystem) {
+                        apps.filter {
+                            (if (filterSystem) it.isSystem else !it.isSystem) &&
+                                    (it.appName.contains(appSearchQuery, ignoreCase = true) || it.packageName.contains(appSearchQuery, ignoreCase = true))
+                        }
                     }
-                    val selectedCount = apps.count { it.isSelected }
+                    val selectedCount = remember(apps) { apps.count { it.isSelected } }
 
                     Card(
                         modifier = Modifier.fillMaxWidth(),
@@ -643,41 +645,27 @@ fun ToolsScreen(repository: KernelRepository) {
 
                             Spacer(modifier = Modifier.height(10.dp))
 
-                            Row(
+                            Button(
+                                onClick = { repository.toggleTelemetryLogging(!isLoggingEnabled) },
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (isLoggingEnabled) WarningOrange else SuccessGreen
+                                )
                             ) {
-                                Button(
-                                    onClick = { repository.toggleTelemetryLogging(!isLoggingEnabled) },
-                                    modifier = Modifier.weight(1f),
-                                    shape = RoundedCornerShape(10.dp),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = if (isLoggingEnabled) WarningOrange else SuccessGreen
-                                    )
-                                ) {
-                                    Icon(
-                                        imageVector = if (isLoggingEnabled) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(16.dp),
-                                        tint = Color.Black
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = if (isLoggingEnabled) "Disable Logging" else "Enable Logging",
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color.Black
-                                    )
-                                }
-
-                                OutlinedButton(
-                                    onClick = { coroutineScope.launch { db.telemetryLogDao().clearAll() } },
-                                    shape = RoundedCornerShape(10.dp)
-                                ) {
-                                    Icon(Icons.Default.DeleteOutline, contentDescription = null, tint = DangerRed, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Clear Logs", fontSize = 12.sp, color = DangerRed, fontWeight = FontWeight.Bold)
-                                }
+                                Icon(
+                                    imageVector = if (isLoggingEnabled) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                    tint = Color.Black
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = if (isLoggingEnabled) "Disable Logging" else "Enable Logging",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.Black
+                                )
                             }
 
                             Spacer(modifier = Modifier.height(12.dp))
@@ -939,7 +927,7 @@ fun VramTuningSection(
                         else MaterialTheme.colorScheme.primary
                     ) {
                         Text(
-                            text = if (vramConfig.isRootMemoryAccessGranted) "ROOT KERNEL" else "${vramConfig.hardwareRamTierGb} GB RAM",
+                            text = if (vramConfig.isRootMemoryAccessGranted) "HARDWARE SYNC ACTIVE" else "${vramConfig.hardwareRamTierGb} GB RAM",
                             fontWeight = FontWeight.Bold,
                             fontSize = 10.sp
                         )
@@ -1132,7 +1120,7 @@ fun VramTuningSection(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "Grant Root Permissions & Refresh Real Device RAM / zRAM Info",
+                        text = "Refresh RAM & zRAM Hardware Telemetry",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         color = if (vramConfig.isRootMemoryAccessGranted) Color.Black else MaterialTheme.colorScheme.onPrimary
@@ -1798,7 +1786,7 @@ fun FpsMonitorSection(
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         val perms = listOf(
-                            "Root SF" to recorderConfig.isRootFpsGranted,
+                            "SurfaceFlinger" to recorderConfig.isRootFpsGranted,
                             "Usage Stats" to recorderConfig.isUsageStatsGranted,
                             "DUMP / GFX" to recorderConfig.isDumpPermissionGranted,
                             "HUD Overlay" to recorderConfig.isOverlayPermissionGranted
@@ -2500,11 +2488,7 @@ fun FpsMonitorSection(
                         }
                     }
 
-                    if (recorderConfig.recordedSessions.isNotEmpty()) {
-                        TextButton(onClick = { repository.clearAllFpsSessions() }) {
-                            Text("Clear All", fontSize = 11.sp, color = DangerRed, fontWeight = FontWeight.Bold)
-                        }
-                    }
+
                 }
 
                 if (lastSavedJpgPath != null) {

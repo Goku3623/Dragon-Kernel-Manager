@@ -11,9 +11,17 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.Crossfade
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -27,6 +35,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -106,6 +115,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        try {
+            DragonMonitorService.startService(applicationContext)
+        } catch (_: Exception) {}
     }
 
     private fun ensureUnrestrictedHighRefreshRateWindow() {
@@ -149,9 +161,6 @@ fun DragonKernelMainScreen(
     val customProfiles by repository.customProfilesFlow.collectAsState()
     val activeCustomProfile by repository.activeCustomProfileFlow.collectAsState()
     val feedbackMessage by repository.lastActionFeedbackFlow.collectAsState()
-    val currentFps by repository.currentFpsFlow.collectAsState()
-    val cpuTemp by repository.cpuTempFlow.collectAsState()
-    val gpuConfig by repository.gpuConfigFlow.collectAsState()
     val isRootGranted by repository.isRootGrantedFlow.collectAsState()
 
     val themeConfig by repository.themeConfigFlow.collectAsState()
@@ -183,6 +192,9 @@ fun DragonKernelMainScreen(
     }
 
     if (showProfileDialog) {
+        val currentFps by repository.currentFpsFlow.collectAsState()
+        val cpuTemp by repository.cpuTempFlow.collectAsState()
+        val gpuConfig by repository.gpuConfigFlow.collectAsState()
         ProfileSelectionDialog(
             currentProfile = activeProfile,
             customProfiles = customProfiles,
@@ -212,8 +224,7 @@ fun DragonKernelMainScreen(
             snackbarHost = { SnackbarHost(snackbarHostState) },
             topBar = {
                 DragonGamingHudTopBar(
-                    currentFps = currentFps,
-                    cpuTemp = cpuTemp,
+                    repository = repository,
                     isRootGranted = isRootGranted,
                     activeProfileLabel = activeCustomProfile?.title ?: activeProfile.title,
                     isGamingActive = activeCustomProfile == null && activeProfile == BatteryProfile.GAMING,
@@ -263,6 +274,11 @@ fun DragonKernelMainScreen(
                         ) {
                             NavigationTab.values().forEach { tab ->
                                 val isSelected = (selectedTab == tab)
+                                val iconScale by animateFloatAsState(
+                                    targetValue = if (isSelected) 1.14f else 1.0f,
+                                    animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
+                                    label = "nav_icon_scale_${tab.name}"
+                                )
                                 NavigationBarItem(
                                     modifier = Modifier.testTag("nav_tab_${tab.name.lowercase()}"),
                                     selected = isSelected,
@@ -271,7 +287,9 @@ fun DragonKernelMainScreen(
                                         Icon(
                                             imageVector = tab.icon,
                                             contentDescription = tab.label,
-                                            modifier = Modifier.size(20.dp)
+                                            modifier = Modifier
+                                                .size(20.dp)
+                                                .scale(iconScale)
                                         )
                                     },
                                     label = {
@@ -309,9 +327,9 @@ fun DragonKernelMainScreen(
                                     Brush.horizontalGradient(
                                         listOf(
                                             Color.Transparent,
-                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.65f),
-                                            NeonCyan.copy(alpha = 0.45f),
-                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.65f),
+                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.55f),
+                                            NeonCyan.copy(alpha = 0.40f),
+                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.55f),
                                             Color.Transparent
                                         )
                                     )
@@ -325,6 +343,11 @@ fun DragonKernelMainScreen(
                         ) {
                             NavigationTab.values().forEach { tab ->
                                 val isSelected = (selectedTab == tab)
+                                val iconScale by animateFloatAsState(
+                                    targetValue = if (isSelected) 1.14f else 1.0f,
+                                    animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
+                                    label = "nav_icon_scale_${tab.name}"
+                                )
                                 NavigationBarItem(
                                     modifier = Modifier.testTag("nav_tab_${tab.name.lowercase()}"),
                                     selected = isSelected,
@@ -333,7 +356,9 @@ fun DragonKernelMainScreen(
                                         Icon(
                                             imageVector = tab.icon,
                                             contentDescription = tab.label,
-                                            modifier = Modifier.size(20.dp)
+                                            modifier = Modifier
+                                                .size(20.dp)
+                                                .scale(iconScale)
                                         )
                                     },
                                     label = {
@@ -359,10 +384,14 @@ fun DragonKernelMainScreen(
                 }
             }
         ) { innerPadding ->
-            // Lightweight 140ms Crossfade transition keeps tab switches buttery smooth at 120Hz
-            Crossfade(
+            // Smooth fade + subtle scale transition at 120Hz
+            AnimatedContent(
                 targetState = selectedTab,
-                animationSpec = tween(durationMillis = 140, easing = FastOutSlowInEasing),
+                transitionSpec = {
+                    (fadeIn(animationSpec = tween(160, easing = FastOutSlowInEasing)) +
+                            scaleIn(initialScale = 0.985f, animationSpec = tween(160, easing = FastOutSlowInEasing)))
+                        .togetherWith(fadeOut(animationSpec = tween(110, easing = FastOutSlowInEasing)))
+                },
                 label = "GamingHudTabTransition",
                 modifier = Modifier
                     .fillMaxSize()
@@ -565,8 +594,7 @@ private fun IosLiquidGlassBackdrop(
 
 @Composable
 private fun DragonGamingHudTopBar(
-    currentFps: Int,
-    cpuTemp: Float,
+    repository: KernelRepository,
     isRootGranted: Boolean,
     activeProfileLabel: String,
     isGamingActive: Boolean,
@@ -575,17 +603,21 @@ private fun DragonGamingHudTopBar(
     onOpenProfileSwitcher: () -> Unit,
     onFpsClick: () -> Unit
 ) {
+    val currentFps by repository.currentFpsFlow.collectAsState()
+    val cpuTemp by repository.cpuTempFlow.collectAsState()
     val primaryColor = MaterialTheme.colorScheme.primary
-    val fpsColor = when {
+    val targetFpsColor = when {
         currentFps >= 90 -> SuccessGreen
         currentFps >= 55 -> NeonCyan
         else -> WarningOrange
     }
-    val tempColor = when {
+    val targetTempColor = when {
         cpuTemp >= 65f -> DangerRed
         cpuTemp >= 48f -> WarningOrange
         else -> NeonCyan
     }
+    val fpsColor by animateColorAsState(targetValue = targetFpsColor, animationSpec = tween(220), label = "hud_fps_color")
+    val tempColor by animateColorAsState(targetValue = targetTempColor, animationSpec = tween(220), label = "hud_temp_color")
 
     if (isLiquidGlass) {
         val rimAlpha = (0.52f * refractionIntensity).coerceIn(0.24f, 0.75f)

@@ -15,6 +15,9 @@ class DragonKernelApp : Application() {
         createNotificationChannels()
         // Pre-warm database
         DragonDatabase.getInstance(this)
+        try {
+            com.example.service.DragonMonitorService.startService(this)
+        } catch (_: Exception) {}
     }
 
     private fun createNotificationChannels() {

@@ -1,8 +1,14 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -254,7 +260,7 @@ fun CpuScreen(repository: KernelRepository) {
         }
 
 
-        item {
+        item(key = "adreno_cpu_boost") {
             // Adreno CPU Boost Section
             AdrenoCpuBoostCard(
                 config = adrenoCpuBoost,
@@ -264,7 +270,7 @@ fun CpuScreen(repository: KernelRepository) {
         }
 
         // Detailed Cluster Freq & Undervolting Controls
-        items(cpuClusters.size) { index ->
+        items(cpuClusters.size, key = { cpuClusters[it].id }) { index ->
             val cluster = cpuClusters[index]
             ClusterTuningCard(
                 cluster = cluster,
@@ -382,144 +388,163 @@ fun AdrenoCpuBoostCard(
                 )
             }
 
-            if (config.isEnabled) {
-                Spacer(modifier = Modifier.height(12.dp))
-                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Input / Touch Boost Toggle
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Touch & Input Frame Boost", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                        Text(
-                            "Pre-boosts Silver & Gold clusters on touch events to eliminate frame drops",
-                            fontSize = 10.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Switch(
-                        checked = config.inputBoostEnabled,
-                        onCheckedChange = { onUpdate(config.copy(inputBoostEnabled = it)) }
-                    )
+            AnimatedVisibility(
+                visible = config.isEnabled,
+                enter = expandVertically(animationSpec = tween(220)) + fadeIn(animationSpec = tween(180)),
+                exit = shrinkVertically(animationSpec = tween(180)) + fadeOut(animationSpec = tween(140))
+            ) {
+                var gpuThresholdSlider by remember(config.gpuLoadThresholdPercent) {
+                    mutableFloatStateOf(config.gpuLoadThresholdPercent.toFloat())
+                }
+                var boostDurationSlider by remember(config.boostDurationMs) {
+                    mutableFloatStateOf(config.boostDurationMs.toFloat())
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Column {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                    Spacer(modifier = Modifier.height(12.dp))
 
-                // GPU Load Threshold Slider
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("GPU Load Trigger Threshold:", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
-                    Text(
-                        ">${config.gpuLoadThresholdPercent}% GPU Load",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-                Slider(
-                    value = config.gpuLoadThresholdPercent.toFloat(),
-                    onValueChange = { onUpdate(config.copy(gpuLoadThresholdPercent = it.toInt())) },
-                    valueRange = 30f..90f,
-                    steps = 11
-                )
-
-                // Boost Duration Slider
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("Boost Pulse Duration:", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
-                    Text(
-                        "${config.boostDurationMs} ms",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-                Slider(
-                    value = config.boostDurationMs.toFloat(),
-                    onValueChange = { onUpdate(config.copy(boostDurationMs = it.toInt())) },
-                    valueRange = 20f..250f,
-                    steps = 22
-                )
-
-                Spacer(modifier = Modifier.height(6.dp))
-
-                // Silver & Gold Cluster Boost Target Frequencies
-                Text(
-                    text = "Silver Cluster Boost Target (Cortex-A520):",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    listOf(1228800, 1497600, 1651200, 1843200).forEach { freqKhz ->
-                        val selected = config.boostFreqSilverKhz == freqKhz
-                        Button(
-                            onClick = { onUpdate(config.copy(boostFreqSilverKhz = freqKhz)) },
-                            modifier = Modifier
-                                .weight(1f)
-                                .defaultMinSize(minHeight = 32.dp),
-                            contentPadding = PaddingValues(2.dp),
-                            shape = RoundedCornerShape(8.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
-                            )
-                        ) {
+                    // Input / Touch Boost Toggle
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Touch & Input Frame Boost", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                             Text(
-                                text = "${freqKhz / 1000} MHz",
+                                "Pre-boosts Silver & Gold clusters on touch events to eliminate frame drops",
                                 fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (selected) Color.Black else MaterialTheme.colorScheme.onSurface
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
+                        Switch(
+                            checked = config.inputBoostEnabled,
+                            onCheckedChange = { onUpdate(config.copy(inputBoostEnabled = it)) }
+                        )
                     }
-                }
 
-                Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
-                Text(
-                    text = "Gold Cluster Boost Target (Cortex-A720):",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    listOf(1555200, 1958400, 2150400, 2496000).forEach { freqKhz ->
-                        val selected = config.boostFreqGoldKhz == freqKhz
-                        Button(
-                            onClick = { onUpdate(config.copy(boostFreqGoldKhz = freqKhz)) },
-                            modifier = Modifier
-                                .weight(1f)
-                                .defaultMinSize(minHeight = 32.dp),
-                            contentPadding = PaddingValues(2.dp),
-                            shape = RoundedCornerShape(8.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
-                            )
-                        ) {
-                            Text(
-                                text = "${freqKhz / 1000} MHz",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (selected) Color.Black else MaterialTheme.colorScheme.onSurface
-                            )
+                    // GPU Load Threshold Slider
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("GPU Load Trigger Threshold:", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
+                        Text(
+                            ">${gpuThresholdSlider.toInt()}% GPU Load",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Slider(
+                        value = gpuThresholdSlider,
+                        onValueChange = { gpuThresholdSlider = it },
+                        onValueChangeFinished = {
+                            onUpdate(config.copy(gpuLoadThresholdPercent = gpuThresholdSlider.toInt()))
+                        },
+                        valueRange = 30f..90f,
+                        steps = 11
+                    )
+
+                    // Boost Duration Slider
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Boost Pulse Duration:", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
+                        Text(
+                            "${boostDurationSlider.toInt()} ms",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Slider(
+                        value = boostDurationSlider,
+                        onValueChange = { boostDurationSlider = it },
+                        onValueChangeFinished = {
+                            onUpdate(config.copy(boostDurationMs = boostDurationSlider.toInt()))
+                        },
+                        valueRange = 20f..250f,
+                        steps = 22
+                    )
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    // Silver & Gold Cluster Boost Target Frequencies
+                    Text(
+                        text = "Silver Cluster Boost Target (Cortex-A520):",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf(1228800, 1497600, 1651200, 1843200).forEach { freqKhz ->
+                            val selected = config.boostFreqSilverKhz == freqKhz
+                            Button(
+                                onClick = { onUpdate(config.copy(boostFreqSilverKhz = freqKhz)) },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .defaultMinSize(minHeight = 34.dp),
+                                contentPadding = PaddingValues(2.dp),
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
+                                )
+                            ) {
+                                Text(
+                                    text = "${freqKhz / 1000} MHz",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (selected) Color.Black else MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Text(
+                        text = "Gold Cluster Boost Target (Cortex-A720):",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf(1555200, 1958400, 2150400, 2496000).forEach { freqKhz ->
+                            val selected = config.boostFreqGoldKhz == freqKhz
+                            Button(
+                                onClick = { onUpdate(config.copy(boostFreqGoldKhz = freqKhz)) },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .defaultMinSize(minHeight = 34.dp),
+                                contentPadding = PaddingValues(2.dp),
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
+                                )
+                            ) {
+                                Text(
+                                    text = "${freqKhz / 1000} MHz",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (selected) Color.Black else MaterialTheme.colorScheme.onSurface
+                                )
+                            }
                         }
                     }
                 }
@@ -624,13 +649,17 @@ fun ClusterTuningCard(
             Spacer(modifier = Modifier.height(12.dp))
 
             // Max Frequency Slider
+            val initialMaxIndex = cluster.availableFrequencies.indexOf(cluster.maxFreqKhz).takeIf { it >= 0 } ?: (cluster.availableFrequencies.size - 1)
+            var maxIndexSlider by remember(cluster.maxFreqKhz) { mutableFloatStateOf(initialMaxIndex.toFloat()) }
+            val currentDisplayedMaxKhz = cluster.availableFrequencies.getOrElse(maxIndexSlider.toInt().coerceIn(0, cluster.availableFrequencies.size - 1)) { cluster.maxFreqKhz }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text("Max Frequency Cap:", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
                 Text(
-                    "${cluster.maxFreqKhz / 1000} MHz",
+                    "${currentDisplayedMaxKhz / 1000} MHz",
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     fontFamily = FontFamily.Monospace,
@@ -638,11 +667,11 @@ fun ClusterTuningCard(
                 )
             }
 
-            val maxIndex = cluster.availableFrequencies.indexOf(cluster.maxFreqKhz).takeIf { it >= 0 } ?: (cluster.availableFrequencies.size - 1)
             Slider(
-                value = maxIndex.toFloat(),
-                onValueChange = { newVal ->
-                    val chosenFreq = cluster.availableFrequencies[newVal.toInt().coerceIn(0, cluster.availableFrequencies.size - 1)]
+                value = maxIndexSlider,
+                onValueChange = { maxIndexSlider = it },
+                onValueChangeFinished = {
+                    val chosenFreq = cluster.availableFrequencies[maxIndexSlider.toInt().coerceIn(0, cluster.availableFrequencies.size - 1)]
                     val minF = if (cluster.minFreqKhz > chosenFreq) chosenFreq else cluster.minFreqKhz
                     onUpdateFreq(minF, chosenFreq)
                 },
@@ -651,13 +680,17 @@ fun ClusterTuningCard(
             )
 
             // Min Frequency Slider
+            val initialMinIndex = cluster.availableFrequencies.indexOf(cluster.minFreqKhz).takeIf { it >= 0 } ?: 0
+            var minIndexSlider by remember(cluster.minFreqKhz) { mutableFloatStateOf(initialMinIndex.toFloat()) }
+            val currentDisplayedMinKhz = cluster.availableFrequencies.getOrElse(minIndexSlider.toInt().coerceIn(0, cluster.availableFrequencies.size - 1)) { cluster.minFreqKhz }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text("Min Scaling Frequency:", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
                 Text(
-                    "${cluster.minFreqKhz / 1000} MHz",
+                    "${currentDisplayedMinKhz / 1000} MHz",
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     fontFamily = FontFamily.Monospace,
@@ -665,11 +698,11 @@ fun ClusterTuningCard(
                 )
             }
 
-            val minIndex = cluster.availableFrequencies.indexOf(cluster.minFreqKhz).takeIf { it >= 0 } ?: 0
             Slider(
-                value = minIndex.toFloat(),
-                onValueChange = { newVal ->
-                    val chosenFreq = cluster.availableFrequencies[newVal.toInt().coerceIn(0, cluster.availableFrequencies.size - 1)]
+                value = minIndexSlider,
+                onValueChange = { minIndexSlider = it },
+                onValueChangeFinished = {
+                    val chosenFreq = cluster.availableFrequencies[minIndexSlider.toInt().coerceIn(0, cluster.availableFrequencies.size - 1)]
                     val maxF = if (cluster.maxFreqKhz < chosenFreq) chosenFreq else cluster.maxFreqKhz
                     onUpdateFreq(chosenFreq, maxF)
                 },
@@ -682,6 +715,11 @@ fun ClusterTuningCard(
             Spacer(modifier = Modifier.height(10.dp))
 
             // Undervolting Slider
+            var undervoltSlider by remember(cluster.undervoltOffsetMv) {
+                mutableFloatStateOf(cluster.undervoltOffsetMv.toFloat())
+            }
+            val displayedUndervolt = undervoltSlider.toInt()
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -702,11 +740,11 @@ fun ClusterTuningCard(
                 }
 
                 Badge(
-                    containerColor = if (cluster.undervoltOffsetMv < 0) SuccessGreen.copy(alpha = 0.2f) else MaterialTheme.colorScheme.primaryContainer,
-                    contentColor = if (cluster.undervoltOffsetMv < 0) SuccessGreen else MaterialTheme.colorScheme.primary
+                    containerColor = if (displayedUndervolt < 0) SuccessGreen.copy(alpha = 0.2f) else MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = if (displayedUndervolt < 0) SuccessGreen else MaterialTheme.colorScheme.primary
                 ) {
                     Text(
-                        text = "${cluster.undervoltOffsetMv} mV",
+                        text = "$displayedUndervolt mV",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         fontFamily = FontFamily.Monospace
@@ -715,8 +753,9 @@ fun ClusterTuningCard(
             }
 
             Slider(
-                value = cluster.undervoltOffsetMv.toFloat(),
-                onValueChange = { onUpdateUndervolt(it.toInt()) },
+                value = undervoltSlider,
+                onValueChange = { undervoltSlider = it },
+                onValueChangeFinished = { onUpdateUndervolt(undervoltSlider.toInt()) },
                 valueRange = -100f..50f,
                 steps = 29 // 5mV steps
             )

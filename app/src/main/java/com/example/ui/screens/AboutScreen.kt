@@ -179,7 +179,7 @@ fun AboutScreen(repository: KernelRepository) {
                     AboutDetailRow("GPU Architecture", "Qualcomm Adreno 735 (Max 1100 MHz)")
                     AboutDetailRow("Charging Spec", "90W HyperCharge (5000 mAh Cell)")
                     AboutDetailRow("Kernel Version", "Linux 6.1.75-Dragon-Kernel-v1.0")
-                    AboutDetailRow("Root Privilege", if (isRootGranted) "Granted (Root SU Active)" else "Safe Emulated Kernel Layer")
+                    AboutDetailRow("Hardware Telemetry", if (isRootGranted) "Active (Hardware Sync Enabled)" else "Active Telemetry Mode")
                     AboutDetailRow("SELinux Policy", "Enforcing (Custom Rules Supported)")
                 }
             }

@@ -1,7 +1,11 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -140,7 +144,7 @@ fun DashboardScreen(
                                         .padding(horizontal = 6.dp, vertical = 2.dp)
                                 ) {
                                     Text(
-                                        text = if (isRootGranted) "ROOT UNLOCKED" else "SAFE KERNEL",
+                                        text = if (isRootGranted) "HARDWARE SYNC ACTIVE" else "TELEMETRY READY",
                                         fontSize = 9.sp,
                                         fontFamily = FontFamily.Monospace,
                                         fontWeight = FontWeight.ExtraBold,
@@ -719,17 +723,6 @@ fun DashboardScreen(
                                         color = primaryColor
                                     )
                                 }
-
-                                TextButton(
-                                    onClick = { repository.resetBatterySessionStats() },
-                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                                ) {
-                                    Text(
-                                        text = "Reset",
-                                        fontSize = 12.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
                             }
                         }
                     }
@@ -787,7 +780,7 @@ fun DashboardScreen(
                         ) {
                             Icon(
                                 imageVector = Icons.Default.NotificationsActive,
-                                contentDescription = "Restart Telemetry",
+                                contentDescription = "Sync HUD Service",
                                 modifier = Modifier.size(16.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
@@ -808,35 +801,49 @@ private fun QuickModeChip(
     accentColor: Color,
     onClick: () -> Unit
 ) {
+    val bgColor by animateColorAsState(
+        targetValue = if (isSelected) accentColor.copy(alpha = 0.22f)
+        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
+        animationSpec = tween(180),
+        label = "chip_bg_$label"
+    )
+    val borderColor by animateColorAsState(
+        targetValue = if (isSelected) accentColor else MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
+        animationSpec = tween(180),
+        label = "chip_border_$label"
+    )
+    val contentColor by animateColorAsState(
+        targetValue = if (isSelected) accentColor else MaterialTheme.colorScheme.onSurfaceVariant,
+        animationSpec = tween(180),
+        label = "chip_content_$label"
+    )
+
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(10.dp))
-            .background(
-                if (isSelected) accentColor.copy(alpha = 0.22f)
-                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
-            )
+            .clip(RoundedCornerShape(12.dp))
+            .background(bgColor)
             .border(
                 width = 1.dp,
-                color = if (isSelected) accentColor else MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
-                shape = RoundedCornerShape(10.dp)
+                color = borderColor,
+                shape = RoundedCornerShape(12.dp)
             )
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 7.dp)
+            .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
                 imageVector = icon,
                 contentDescription = label,
-                tint = if (isSelected) accentColor else MaterialTheme.colorScheme.onSurfaceVariant,
+                tint = contentColor,
                 modifier = Modifier.size(14.dp)
             )
-            Spacer(modifier = Modifier.width(5.dp))
+            Spacer(modifier = Modifier.width(6.dp))
             Text(
                 text = label,
                 fontSize = 10.sp,
                 fontFamily = FontFamily.Monospace,
                 fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.SemiBold,
-                color = if (isSelected) accentColor else MaterialTheme.colorScheme.onSurfaceVariant
+                color = contentColor
             )
         }
     }
@@ -855,17 +862,35 @@ fun TelemetryMiniCard(
 ) {
     val themeCustomization = LocalThemeCustomization.current
     val cardShape = RoundedCornerShape(themeCustomization.cornerRadiusDp.dp)
-    val glowAlpha = (themeCustomization.borderGlowIntensity * 0.6f).coerceIn(0.18f, 0.75f)
+    val glowAlpha = (themeCustomization.borderGlowIntensity * 0.55f).coerceIn(0.16f, 0.70f)
+    val animatedAccent by animateColorAsState(
+        targetValue = accentColor,
+        animationSpec = tween(220),
+        label = "telemetry_accent_$title"
+    )
 
     Card(
         modifier = modifier
             .clip(cardShape)
-            .border(1.dp, accentColor.copy(alpha = glowAlpha), cardShape)
+            .border(1.dp, animatedAccent.copy(alpha = glowAlpha), cardShape)
             .clickable(onClick = onClick),
         shape = cardShape,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
-        Column(modifier = Modifier.padding(13.dp)) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    Brush.linearGradient(
+                        listOf(
+                            animatedAccent.copy(alpha = 0.07f),
+                            Color.Transparent
+                        )
+                    )
+                )
+                .padding(14.dp)
+                .animateContentSize()
+        ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -873,7 +898,7 @@ fun TelemetryMiniCard(
             ) {
                 Text(
                     text = title,
-                    fontSize = 9.sp,
+                    fontSize = 9.5.sp,
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 0.7.sp,
@@ -881,16 +906,16 @@ fun TelemetryMiniCard(
                 )
                 Box(
                     modifier = Modifier
-                        .size(24.dp)
-                        .clip(RoundedCornerShape(7.dp))
-                        .background(accentColor.copy(alpha = 0.14f)),
+                        .size(26.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(animatedAccent.copy(alpha = 0.15f)),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = icon,
                         contentDescription = title,
-                        tint = accentColor,
-                        modifier = Modifier.size(14.dp)
+                        tint = animatedAccent,
+                        modifier = Modifier.size(15.dp)
                     )
                 }
             }
@@ -902,7 +927,7 @@ fun TelemetryMiniCard(
                 fontSize = 17.sp,
                 fontWeight = FontWeight.Black,
                 fontFamily = FontFamily.Monospace,
-                color = accentColor,
+                color = animatedAccent,
                 maxLines = 1
             )
 
@@ -916,7 +941,7 @@ fun TelemetryMiniCard(
             if (progress != null) {
                 val animatedBar by animateFloatAsState(
                     targetValue = progress.coerceIn(0f, 1f),
-                    animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+                    animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow),
                     label = "telemetry_bar_$title"
                 )
                 Spacer(modifier = Modifier.height(8.dp))
@@ -926,7 +951,7 @@ fun TelemetryMiniCard(
                         .fillMaxWidth()
                         .height(4.dp)
                         .clip(RoundedCornerShape(2.dp)),
-                    color = accentColor,
+                    color = animatedAccent,
                     trackColor = MaterialTheme.colorScheme.surfaceVariant
                 )
             }

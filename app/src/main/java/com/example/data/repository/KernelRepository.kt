@@ -147,7 +147,7 @@ class KernelRepository private constructor(private val context: Context) {
     val activeForegroundAppFlow: StateFlow<String> = _activeForegroundAppFlow.asStateFlow()
 
     // Charging Controls
-    private val _chargingControlsFlow = MutableStateFlow(ChargingControls())
+    private val _chargingControlsFlow = MutableStateFlow(loadChargingControlsPrefs())
     val chargingControlsFlow: StateFlow<ChargingControls> = _chargingControlsFlow.asStateFlow()
 
     // Telemetry & Thermals
@@ -207,6 +207,165 @@ class KernelRepository private constructor(private val context: Context) {
     // Telemetry Logging Enable/Disable state
     private val _isLoggingEnabledFlow = MutableStateFlow(true)
     val isLoggingEnabledFlow: StateFlow<Boolean> = _isLoggingEnabledFlow.asStateFlow()
+
+    // Fresh Start Telemetry Session Options config flow
+    private val _freshStartConfigFlow = MutableStateFlow(loadFreshStartPrefs())
+    val freshStartConfigFlow: StateFlow<FreshStartTelemetryConfig> = _freshStartConfigFlow.asStateFlow()
+
+    fun startFreshTelemetrySession() {
+        sessionScreenOnMs = 0L
+        sessionScreenOffMs = 0L
+        sessionDeepSleepMs = 0L
+        sessionAwakeOffMs = 0L
+        sessionScreenOnMah = 0.0
+        sessionScreenOffMah = 0.0
+        sessionScreenOnPct = 0.0
+        sessionScreenOffPct = 0.0
+        val now = System.currentTimeMillis()
+        val cur = _freshStartConfigFlow.value
+        val updated = cur.copy(sessionStartTimeMs = now)
+        _freshStartConfigFlow.value = updated
+        saveFreshStartPrefs(updated)
+        _lastActionFeedbackFlow.value = "Fresh drain & sleep telemetry session active!"
+        tickTelemetry()
+    }
+
+    fun updateFreshStartConfig(config: FreshStartTelemetryConfig) {
+        _freshStartConfigFlow.value = config
+        saveFreshStartPrefs(config)
+    }
+
+    private fun saveFreshStartPrefs(config: FreshStartTelemetryConfig) {
+        try {
+            val prefs = context.getSharedPreferences("dragon_fresh_start_prefs", Context.MODE_PRIVATE)
+            prefs.edit()
+                .putBoolean("auto_unplug", config.autoFreshStartOnUnplug)
+                .putBoolean("auto_full", config.autoFreshStartOnFullCharge)
+                .putBoolean("auto_boot", config.autoFreshStartOnBoot)
+                .putString("baseline_mode", config.telemetryBaselineMode)
+                .putLong("session_start_ms", config.sessionStartTimeMs)
+                .apply()
+        } catch (_: Exception) {}
+    }
+
+    private fun loadFreshStartPrefs(): FreshStartTelemetryConfig {
+        return try {
+            val prefs = context.getSharedPreferences("dragon_fresh_start_prefs", Context.MODE_PRIVATE)
+            FreshStartTelemetryConfig(
+                autoFreshStartOnUnplug = prefs.getBoolean("auto_unplug", true),
+                autoFreshStartOnFullCharge = prefs.getBoolean("auto_full", true),
+                autoFreshStartOnBoot = prefs.getBoolean("auto_boot", false),
+                telemetryBaselineMode = prefs.getString("baseline_mode", "CURRENT_UNPLUG") ?: "CURRENT_UNPLUG",
+                sessionStartTimeMs = prefs.getLong("session_start_ms", System.currentTimeMillis())
+            )
+        } catch (_: Exception) {
+            FreshStartTelemetryConfig()
+        }
+    }
+
+    private fun saveChargingControlsPrefs(config: ChargingControls) {
+        try {
+            val prefs = context.getSharedPreferences("dragon_charging_prefs", Context.MODE_PRIVATE)
+            prefs.edit()
+                .putString("speed_mode", config.speedMode.name)
+                .putBoolean("bypass_charging", config.bypassCharging)
+                .putBoolean("manual_limiter_enabled", config.manualCurrentLimiterEnabled)
+                .putInt("manual_limit_ma", config.manualCurrentLimitMa)
+                .putBoolean("custom_temp_enabled", config.customTempLimitEnabled)
+                .putFloat("custom_temp_c", config.customTempLimitC)
+                .putString("custom_temp_mode", config.customTempThermalMode.name)
+                .putInt("custom_temp_fallback_ma", config.customTempFallbackCurrentMa)
+                .putFloat("custom_temp_cooldown_c", config.customTempCooldownDeltaC)
+                .putBoolean("bypass_thermal_limit", config.bypassThermalLimit)
+                .putBoolean("lock_sysfs_ro", config.lockSysfsNodesReadOnly)
+                .putBoolean("override_thermal_daemon", config.overrideRomThermalDaemon)
+                .putBoolean("force_pmic_voter", config.forcePmicVoterOverride)
+                .apply()
+        } catch (_: Exception) {}
+    }
+
+    private fun loadChargingControlsPrefs(): ChargingControls {
+        return try {
+            val prefs = context.getSharedPreferences("dragon_charging_prefs", Context.MODE_PRIVATE)
+            val modeName = prefs.getString("speed_mode", ChargingSpeedMode.HYPERCHARGE_90W.name)
+            val speedMode = ChargingSpeedMode.entries.find { it.name == modeName } ?: ChargingSpeedMode.HYPERCHARGE_90W
+            val tModeName = prefs.getString("custom_temp_mode", CurrentLimiterThermalMode.SMART_STEP_DOWN.name)
+            val thermalMode = CurrentLimiterThermalMode.entries.find { it.name == tModeName } ?: CurrentLimiterThermalMode.SMART_STEP_DOWN
+            val limitMa = prefs.getInt("manual_limit_ma", 20000).coerceIn(1100, 20000)
+            val tempC = prefs.getFloat("custom_temp_c", 40.0f).coerceIn(32.0f, 48.0f)
+            val cooldownC = prefs.getFloat("custom_temp_cooldown_c", 2.0f).coerceIn(1.0f, 4.0f)
+            val tempEnabled = prefs.getBoolean("custom_temp_enabled", true)
+            ChargingControls(
+                speedMode = speedMode,
+                bypassCharging = prefs.getBoolean("bypass_charging", false),
+                manualCurrentLimiterEnabled = prefs.getBoolean("manual_limiter_enabled", false),
+                manualCurrentLimitMa = limitMa,
+                customTempLimitEnabled = tempEnabled,
+                customTempLimitC = tempC,
+                customTempThermalMode = thermalMode,
+                customTempFallbackCurrentMa = prefs.getInt("custom_temp_fallback_ma", 2200).coerceIn(1100, 10000),
+                customTempCooldownDeltaC = cooldownC,
+                effectiveEnforcedCurrentMa = limitMa,
+                customTempStatusText = if (tempEnabled) {
+                    String.format(
+                        java.util.Locale.US,
+                        "Armed • Monitoring AOSP battery temp (Limit: %.1f°C • Resume: %.1f°C)",
+                        tempC,
+                        tempC - cooldownC
+                    )
+                } else {
+                    "Disabled • Custom Current Limiter ignores temperature threshold"
+                },
+                bypassThermalLimit = prefs.getBoolean("bypass_thermal_limit", false),
+                lockSysfsNodesReadOnly = prefs.getBoolean("lock_sysfs_ro", true),
+                overrideRomThermalDaemon = prefs.getBoolean("override_thermal_daemon", true),
+                forcePmicVoterOverride = prefs.getBoolean("force_pmic_voter", true)
+            )
+        } catch (_: Exception) {
+            ChargingControls()
+        }
+    }
+
+    private fun loadLearnedBatteryCapacity(designCap: Int): Int? {
+        return try {
+            val prefs = context.getSharedPreferences("dragon_battery_learning_prefs", Context.MODE_PRIVATE)
+            val learned = prefs.getInt("learned_capacity_mah", 0)
+            if (learned in (designCap * 0.5).toInt()..(designCap * 1.15).toInt()) learned else null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun updateAdaptiveBatteryLearning(currentLevel: Int, currentCounter: Long, designCap: Int) {
+        if (currentLevel < 0 || currentLevel > 100) return
+        try {
+            val prefs = context.getSharedPreferences("dragon_battery_learning_prefs", Context.MODE_PRIVATE)
+            var learnedCap = prefs.getInt("learned_capacity_mah", 0)
+            val prevLevel = prefs.getInt("last_level", -1)
+            val prevCounter = prefs.getLong("last_counter", -1L)
+
+            prefs.edit()
+                .putInt("last_level", currentLevel)
+                .putLong("last_counter", currentCounter)
+                .apply()
+
+            if (prevLevel != -1 && prevCounter != -1L && currentCounter > 0 && prevCounter > 0) {
+                val levelDelta = kotlin.math.abs(currentLevel - prevLevel)
+                val counterDelta = kotlin.math.abs(currentCounter - prevCounter)
+                if (levelDelta >= 5 && counterDelta > 150) {
+                    val inferredFull = ((counterDelta.toDouble() * 100.0) / levelDelta.toDouble()).roundToInt()
+                    if (inferredFull in (designCap * 0.5).toInt()..(designCap * 1.15).toInt()) {
+                        learnedCap = if (learnedCap <= 0) {
+                            inferredFull
+                        } else {
+                            (learnedCap * 0.88 + inferredFull * 0.12).roundToInt()
+                        }
+                        prefs.edit().putInt("learned_capacity_mah", learnedCap).apply()
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+    }
 
     // Root status
     private val _isRootGrantedFlow = MutableStateFlow(RootHelper.isRootAvailable)
@@ -314,6 +473,11 @@ class KernelRepository private constructor(private val context: Context) {
     private val _lastActionFeedbackFlow = MutableStateFlow<String?>(null)
     val lastActionFeedbackFlow: StateFlow<String?> = _lastActionFeedbackFlow.asStateFlow()
 
+    @Volatile
+    private var lastChargingEnforcementMs: Long = 0L
+    @Volatile
+    private var lastEnforcedBypassState: Boolean? = null
+
     init {
         loadInstalledApps()
         seedSampleLogsIfEmpty()
@@ -331,7 +495,6 @@ class KernelRepository private constructor(private val context: Context) {
             val peakHz = getPeakSupportedRefreshRate()
             val granted = RootHelper.grantRootFpsPermissions(context.packageName, peakHz)
             if (granted) {
-                RootHelper.grantRootChargingPermissions(context.packageName)
                 RootHelper.grantRootRamAndVramPermissions(context.packageName)
             }
             _isRootGrantedFlow.value = granted || RootHelper.isRootAvailable
@@ -1023,8 +1186,6 @@ class KernelRepository private constructor(private val context: Context) {
 
     fun grantRootAndRefreshBatteryHealth() {
         scope.launch {
-            val granted = RootHelper.grantRootChargingPermissions(context.packageName)
-            _isRootGrantedFlow.value = granted || RootHelper.isRootAvailable
             pollPowerSupplySysfsAsync()
             kotlinx.coroutines.delay(150)
             tickTelemetry()
@@ -1033,43 +1194,98 @@ class KernelRepository private constructor(private val context: Context) {
         }
     }
 
+    fun notifyPowerDisconnected() {
+        sysfsStatusCharging = false
+        _batteryFlow.value = _batteryFlow.value.copy(isCharging = false)
+        if (_freshStartConfigFlow.value.autoFreshStartOnUnplug) {
+            startFreshTelemetrySession()
+        } else {
+            tickTelemetry()
+        }
+    }
+
+    fun notifyPowerConnected() {
+        sysfsStatusCharging = true
+        _batteryFlow.value = _batteryFlow.value.copy(isCharging = true)
+        lastChargingEnforcementMs = 0L
+        enforceActiveChargingRulesAsync(forceImmediate = true)
+        tickTelemetry()
+    }
+
+    private fun enforceActiveChargingRulesAsync(forceImmediate: Boolean = false) {
+        val now = SystemClock.elapsedRealtime()
+        if (!forceImmediate && (now - lastChargingEnforcementMs) < 4000L) return
+        lastChargingEnforcementMs = now
+
+        val charging = _chargingControlsFlow.value
+        val bat = _batteryFlow.value
+        val night = charging.nightCharging
+        val needBypass = charging.bypassCharging || bat.isBypassCharging
+        val needThermalBypass = charging.bypassThermalLimit
+        val needCurrentLimit = charging.manualCurrentLimiterEnabled || (night.isCurrentlyActive && !needBypass)
+
+        if (!needBypass && !needThermalBypass && !needCurrentLimit && lastEnforcedBypassState != true) {
+            return
+        }
+
+        scope.launch {
+            if (!RootHelper.isRootAvailable) {
+                RootHelper.refreshRootStatus()
+            }
+            if (!RootHelper.isRootAvailable) return@launch
+            _isRootGrantedFlow.value = true
+
+            if (needBypass || lastEnforcedBypassState == true) {
+                RootHelper.enforceRootBypassCharging(context.packageName, needBypass)
+                lastEnforcedBypassState = needBypass
+            }
+
+            if (needThermalBypass) {
+                val targetMa = if (charging.manualCurrentLimiterEnabled) {
+                    charging.manualCurrentLimitMa
+                } else {
+                    charging.speedMode.maxCurrentMa
+                }
+                RootHelper.enforceRootBypassThermalLimit(
+                    packageName = context.packageName,
+                    enabled = true,
+                    maxAllowedCurrentMa = targetMa,
+                    isCharging = bat.isCharging
+                )
+            }
+
+            if (needCurrentLimit && !needBypass) {
+                val isNightOnly = night.isCurrentlyActive && !charging.manualCurrentLimiterEnabled
+                val targetMa = if (isNightOnly) {
+                    night.trickleCurrentMa
+                } else {
+                    charging.manualCurrentLimitMa
+                }
+                RootHelper.enforceRootChargingCurrentLimit(
+                    packageName = context.packageName,
+                    enabled = true,
+                    currentMa = targetMa,
+                    fallbackSpeedModeMa = charging.speedMode.maxCurrentMa,
+                    lockReadOnly = charging.lockSysfsNodesReadOnly,
+                    overrideThermalDaemon = charging.overrideRomThermalDaemon || charging.bypassThermalLimit,
+                    forcePmicVoter = charging.forcePmicVoterOverride,
+                    customTempLimitEnabled = charging.manualCurrentLimiterEnabled && charging.customTempLimitEnabled,
+                    customTempLimitC = charging.customTempLimitC,
+                    currentBatteryTempC = bat.temperatureC,
+                    thermalMode = charging.customTempThermalMode.name,
+                    fallbackCurrentMa = charging.customTempFallbackCurrentMa,
+                    cooldownDeltaC = charging.customTempCooldownDeltaC,
+                    isTempThrottlingTriggered = charging.isCustomTempThrottlingActive,
+                    externalBypassActive = needBypass
+                )
+            }
+        }
+    }
+
     private fun pollPowerSupplySysfsAsync() {
         if (!_isRootGrantedFlow.value && !RootHelper.isRootAvailable) return
         scope.launch {
-            val chg = _chargingControlsFlow.value
-            val enforceLimiterSnippet = if (chg.manualCurrentLimiterEnabled && !chg.bypassCharging) {
-                val clampedMa = chg.manualCurrentLimitMa.coerceIn(1100, 20000)
-                val microAmps = clampedMa * 1000L
-                val lockCmd = if (chg.lockSysfsNodesReadOnly) {
-                    "chmod 0444 /sys/class/power_supply/battery/constant_charge_current_max /sys/class/power_supply/battery/constant_charge_current /sys/class/qcom-battery/restrict_cur 2>/dev/null || true"
-                } else ""
-                """
-                chmod 0666 /sys/class/power_supply/battery/constant_charge_current_max /sys/class/power_supply/battery/constant_charge_current /sys/class/qcom-battery/restrict_cur 2>/dev/null || true
-                echo $microAmps > /sys/class/power_supply/battery/constant_charge_current_max 2>/dev/null || echo $clampedMa > /sys/class/power_supply/battery/constant_charge_current_max 2>/dev/null || true
-                echo $microAmps > /sys/class/power_supply/battery/constant_charge_current 2>/dev/null || echo $clampedMa > /sys/class/power_supply/battery/constant_charge_current 2>/dev/null || true
-                echo $microAmps > /sys/class/qcom-battery/restrict_cur 2>/dev/null || echo $clampedMa > /sys/class/qcom-battery/restrict_cur 2>/dev/null || true
-                $lockCmd
-                """.trimIndent()
-            } else ""
-
-            val enforceThermalBypassSnippet = if (chg.bypassThermalLimit && !chg.bypassCharging) {
-                """
-                chmod 0666 /sys/class/power_supply/battery/system_temp_level /sys/class/power_supply/battery/charge_control_limit /sys/class/power_supply/battery/thermal_limit_bypass /sys/class/qcom-battery/thermal_remove /sys/class/thermal/thermal_message/temp_state /sys/class/thermal/thermal_message/charger_temp 2>/dev/null || true
-                echo 0 > /sys/class/power_supply/battery/system_temp_level 2>/dev/null || true
-                echo 0 > /sys/class/power_supply/battery/charge_control_limit 2>/dev/null || true
-                echo 1 > /sys/class/power_supply/battery/thermal_limit_bypass 2>/dev/null || true
-                echo 1 > /sys/class/qcom-battery/thermal_remove 2>/dev/null || true
-                echo 0 > /sys/class/power_supply/battery/input_current_limited 2>/dev/null || true
-                echo 0 > /sys/class/power_supply/battery/restricted_charging 2>/dev/null || true
-                echo 0 > /sys/class/thermal/thermal_message/temp_state 2>/dev/null || true
-                echo 0 > /sys/class/thermal/thermal_message/charger_temp 2>/dev/null || true
-                chmod 0444 /sys/class/power_supply/battery/system_temp_level /sys/class/power_supply/battery/charge_control_limit /sys/class/power_supply/battery/thermal_limit_bypass /sys/class/qcom-battery/thermal_remove /sys/class/thermal/thermal_message/temp_state /sys/class/thermal/thermal_message/charger_temp 2>/dev/null || true
-                """.trimIndent()
-            } else ""
-
             val cmd = """
-                $enforceLimiterSnippet
-                $enforceThermalBypassSnippet
                 cat /sys/class/power_supply/battery/status 2>/dev/null || echo "UNKNOWN"
                 echo "---"
                 cat /sys/class/power_supply/battery/current_now 2>/dev/null || cat /sys/class/power_supply/bms/current_now 2>/dev/null || cat /sys/class/power_supply/usb/current_now 2>/dev/null || echo "0"
@@ -1128,12 +1344,12 @@ class KernelRepository private constructor(private val context: Context) {
                     if (rawTemp != null && rawTemp in 100..850) {
                         sysfsTempC = rawTemp / 10.0f
                     }
-                    if (rawCycles != null && rawCycles in 0..10000) {
+                    if (rawCycles != null && rawCycles in 1..5000) {
                         sysfsCycleCount = rawCycles
                     } else if (dumpsysBatt.isNotBlank()) {
                         val cycleMatch = Regex("""cycle[^0-9]*([0-9]+)""", RegexOption.IGNORE_CASE).find(dumpsysBatt)
                         val parsedCyc = cycleMatch?.groupValues?.getOrNull(1)?.toIntOrNull()
-                        if (parsedCyc != null && parsedCyc in 0..10000) {
+                        if (parsedCyc != null && parsedCyc in 1..5000) {
                             sysfsCycleCount = parsedCyc
                         }
                     }
@@ -1142,10 +1358,13 @@ class KernelRepository private constructor(private val context: Context) {
                     normalizeCapacityToMah(rawDesign)?.let { sysfsChargeFullDesignMah = it }
                     normalizeCapacityToMah(rawCounter)?.let { sysfsChargeCounterMah = it }
 
-                    if (rawSoh != null && rawSoh in 10..100) {
+                    if (rawSoh != null && rawSoh in 40..100) {
                         sysfsSohPercent = rawSoh
                     }
-                    if (!rawHealthStr.isNullOrBlank() && !rawHealthStr.equals("UNKNOWN", ignoreCase = true)) {
+                    if (!rawHealthStr.isNullOrBlank() &&
+                        !rawHealthStr.equals("UNKNOWN", ignoreCase = true) &&
+                        rawHealthStr.toLongOrNull() == null
+                    ) {
                         sysfsHealthStatus = rawHealthStr
                     }
                 }
@@ -1179,32 +1398,35 @@ class KernelRepository private constructor(private val context: Context) {
     }
 
     fun resetBatterySessionStats() {
-        lastTickElapsedMs = SystemClock.elapsedRealtime()
-        lastTickUptimeMs = SystemClock.uptimeMillis()
-        sessionScreenOnMs = 0L
-        sessionScreenOffMs = 0L
-        sessionDeepSleepMs = 0L
-        sessionAwakeOffMs = 0L
-        sessionScreenOnMah = 0.0
-        sessionScreenOffMah = 0.0
-        sessionScreenOnPct = 0.0
-        sessionScreenOffPct = 0.0
-        tickTelemetry()
-        _lastActionFeedbackFlow.value = "Battery session counters reset"
+        // Telemetry reset feature removed
     }
 
     // Telemetry tick called periodically by DragonMonitorService or UI (100% in-process, zero su process forks)
     fun tickTelemetry() {
-        // Read readable sysfs nodes directly in-process (unlocked once via chmod 0644 at startup) for zero-latency, zero-lag hardware reading
+        val directStatusStr = try {
+            val f = java.io.File("/sys/class/power_supply/battery/status")
+            if (f.exists() && f.canRead()) f.readText().trim() else null
+        } catch (_: Exception) { null }
+
+        if (directStatusStr != null) {
+            if (directStatusStr.equals("Charging", ignoreCase = true) || directStatusStr.equals("Full", ignoreCase = true)) {
+                sysfsStatusCharging = true
+            } else if (directStatusStr.equals("Discharging", ignoreCase = true) || directStatusStr.equals("Not charging", ignoreCase = true)) {
+                sysfsStatusCharging = false
+            }
+        }
+
+        // Read readable sysfs nodes directly in-process for zero-latency hardware reading
         val directCurRaw = readDirectSysfsLong(
             "/sys/class/power_supply/battery/current_now",
             "/sys/class/power_supply/bms/current_now",
             "/sys/class/power_supply/usb/current_now"
         )
-        if (directCurRaw != null) {
+        if (directCurRaw != null && directCurRaw != 0L) {
             val absCur = kotlin.math.abs(directCurRaw)
             sysfsCurrentMa = if (absCur > 30000L) (absCur / 1000L).toInt() else absCur.toInt()
         }
+
         val directVoltRaw = readDirectSysfsLong(
             "/sys/class/power_supply/battery/voltage_now",
             "/sys/class/power_supply/bms/voltage_now",
@@ -1214,9 +1436,43 @@ class KernelRepository private constructor(private val context: Context) {
             val normMv = if (directVoltRaw > 20000L) (directVoltRaw / 1000L).toInt() else directVoltRaw.toInt()
             if (normMv in 2500..22000) sysfsVoltageMv = normMv
         }
+
         val directTempRaw = readDirectSysfsLong("/sys/class/power_supply/battery/temp")
         if (directTempRaw != null && directTempRaw in 100L..850L) {
             sysfsTempC = directTempRaw / 10.0f
+        }
+
+        // If direct file reading returned null and root is available, query persistent su pipe fast
+        if ((directCurRaw == null || directVoltRaw == null || directStatusStr == null) && RootHelper.isRootAvailable) {
+            try {
+                val cmd = "cat /sys/class/power_supply/battery/status /sys/class/power_supply/battery/current_now /sys/class/power_supply/battery/voltage_now /sys/class/power_supply/battery/temp 2>/dev/null"
+                val res = kotlinx.coroutines.runBlocking { RootHelper.executeFastTelemetryCommand(cmd) }
+                if (res.exitCode == 0 && res.output.isNotBlank()) {
+                    val lines = res.output.lines().map { it.trim() }.filter { it.isNotEmpty() }
+                    if (lines.isNotEmpty()) {
+                        val st = lines[0]
+                        if (st.equals("Charging", ignoreCase = true) || st.equals("Full", ignoreCase = true)) {
+                            sysfsStatusCharging = true
+                        } else if (st.equals("Discharging", ignoreCase = true) || st.equals("Not charging", ignoreCase = true)) {
+                            sysfsStatusCharging = false
+                        }
+                        val cur = lines.getOrNull(1)?.toLongOrNull()
+                        if (cur != null && cur != 0L) {
+                            val absC = kotlin.math.abs(cur)
+                            sysfsCurrentMa = if (absC > 30000L) (absC / 1000L).toInt() else absC.toInt()
+                        }
+                        val v = lines.getOrNull(2)?.toLongOrNull()
+                        if (v != null && v > 0L) {
+                            val normMv = if (v > 20000L) (v / 1000L).toInt() else v.toInt()
+                            if (normMv in 2500..22000) sysfsVoltageMv = normMv
+                        }
+                        val t = lines.getOrNull(3)?.toLongOrNull()
+                        if (t != null && t in 100L..850L) {
+                            sysfsTempC = t / 10.0f
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
         }
 
         // Direct readable sysfs nodes for Cycle Count, Full Capacity, Design Capacity, SOH, and Charge Counter
@@ -1268,9 +1524,37 @@ class KernelRepository private constructor(private val context: Context) {
         val ifilter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
         val bStatus = context.registerReceiver(null, ifilter)
 
-        val level = bStatus?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: 78
-        val scale = bStatus?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: 100
-        val batPct = if (level >= 0 && scale > 0) (level * 100 / scale) else 78
+        val sysfsCapacityRaw = readDirectSysfsLong(
+            "/sys/class/power_supply/battery/capacity",
+            "/sys/class/power_supply/bms/capacity",
+            "/sys/class/power_supply/fg/capacity"
+        )
+
+        val rawLevel = bStatus?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val rawScale = bStatus?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: 100
+        val bmPct = if (rawLevel > 0 && rawScale > 0) (rawLevel * 100 / rawScale) else -1
+
+        val directCounterFallback = readDirectSysfsLong(
+            "/sys/class/power_supply/battery/charge_counter",
+            "/sys/class/power_supply/bms/charge_counter"
+        )?.let { normalizeCapacityToMah(it) }
+
+        val currentCounterMah = sysfsChargeCounterMah
+            ?: directCounterFallback
+            ?: normalizeCapacityToMah(bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CHARGE_COUNTER)?.toLong())
+
+        val currentLearnedFullMah = sysfsChargeFullMah ?: 4055
+        val derivedFromCounterPct = if (currentCounterMah != null && currentCounterMah > 0 && currentLearnedFullMah > 0) {
+            ((currentCounterMah * 100.0) / currentLearnedFullMah.toDouble()).roundToInt().coerceIn(1, 100)
+        } else null
+
+        val batPct = when {
+            sysfsCapacityRaw != null && sysfsCapacityRaw in 1L..100L -> sysfsCapacityRaw.toInt()
+            bmPct in 1..100 -> bmPct
+            derivedFromCounterPct != null && derivedFromCounterPct in 1..100 -> derivedFromCounterPct
+            _batteryFlow.value.levelPercent in 1..100 -> _batteryFlow.value.levelPercent
+            else -> 78
+        }.coerceIn(1, 100)
 
         val tempRaw = bStatus?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 335) ?: 335
         val realTempC = sysfsTempC ?: (tempRaw / 10.0f)
@@ -1302,7 +1586,17 @@ class KernelRepository private constructor(private val context: Context) {
         val profile = _activeProfileFlow.value
 
         val baseBatTemp = max(20.0f, realTempC)
-        val cpuTemp = baseBatTemp + 4.5f + (Random.nextFloat() * 3.0f)
+        val directCpuThermalRaw = readDirectSysfsLong(
+            "/sys/class/thermal/thermal_zone0/temp",
+            "/sys/class/thermal/thermal_zone1/temp",
+            "/sys/class/thermal/thermal_zone2/temp"
+        )
+        val realCpuTemp = when {
+            directCpuThermalRaw != null && directCpuThermalRaw in 20_000L..115_000L -> directCpuThermalRaw / 1000.0f
+            directCpuThermalRaw != null && directCpuThermalRaw in 200L..1150L -> directCpuThermalRaw / 10.0f
+            else -> null
+        }
+        val cpuTemp = realCpuTemp ?: (baseBatTemp + 4.5f + (Random.nextFloat() * 3.0f))
         _cpuTempFlow.value = cpuTemp
 
         // Night Charging computation
@@ -1327,10 +1621,88 @@ class KernelRepository private constructor(private val context: Context) {
         val isTargetReached = batPct >= nightConfig.targetLimitPercent
         val isNightThermalCutoff = isNightChargingNow && (baseBatTemp > nightConfig.maxThermalCeilingC)
 
-        // Effective bypass charging: explicit user toggle, or night auto-bypass when target reached, or thermal safety cutoff
+        // Evaluate Custom Temperature Limit hysteresis for Custom Current Limiter
+        val resumeTempC = (charging.customTempLimitC - charging.customTempCooldownDeltaC).coerceAtLeast(25.0f)
+        val wasTempThrottling = charging.isCustomTempThrottlingActive
+        val isTempThrottlingNow = when {
+            !charging.customTempLimitEnabled -> false
+            baseBatTemp >= charging.customTempLimitC -> true
+            wasTempThrottling && baseBatTemp > resumeTempC -> true
+            else -> false
+        }
+        val safeStepDownMa = min(charging.manualCurrentLimitMa, charging.customTempFallbackCurrentMa)
+        val effectiveLimiterMa = when {
+            !charging.manualCurrentLimiterEnabled -> charging.speedMode.maxCurrentMa
+            !charging.customTempLimitEnabled || !isTempThrottlingNow -> charging.manualCurrentLimitMa
+            charging.customTempThermalMode == CurrentLimiterThermalMode.PAUSE_UNTIL_COOLED -> 0
+            charging.customTempThermalMode == CurrentLimiterThermalMode.SMART_STEP_DOWN -> safeStepDownMa
+            charging.customTempThermalMode == CurrentLimiterThermalMode.DYNAMIC_THERMAL_HOLD -> {
+                val overC = (baseBatTemp - charging.customTempLimitC).coerceAtLeast(0f)
+                when {
+                    overC >= 2.0f -> min(charging.manualCurrentLimitMa, max(900, safeStepDownMa / 2))
+                    overC >= 0.8f -> safeStepDownMa
+                    else -> min(charging.manualCurrentLimitMa, max(safeStepDownMa, (charging.manualCurrentLimitMa * 0.65f).toInt()))
+                }
+            }
+            else -> safeStepDownMa
+        }
+
+        val customTempStatusMsg = when {
+            !charging.customTempLimitEnabled ->
+                "Disabled • Custom Current Limiter ignores battery temperature"
+            !charging.manualCurrentLimiterEnabled ->
+                String.format(
+                    java.util.Locale.US,
+                    "Standby • Enable Custom Current Limiter to enforce %.1f°C AOSP thermal ceiling",
+                    charging.customTempLimitC
+                )
+            isTempThrottlingNow && charging.customTempThermalMode == CurrentLimiterThermalMode.PAUSE_UNTIL_COOLED ->
+                String.format(
+                    java.util.Locale.US,
+                    "PAUSED AT %.1f°C (Limit %.1f°C) • AOSP input_suspend=1 until cooled to %.1f°C",
+                    baseBatTemp,
+                    charging.customTempLimitC,
+                    resumeTempC
+                )
+            isTempThrottlingNow && charging.customTempThermalMode == CurrentLimiterThermalMode.SMART_STEP_DOWN ->
+                String.format(
+                    java.util.Locale.US,
+                    "STEP-DOWN ACTIVE (%.1f°C >= %.1f°C) • Enforcing %d mA until cooled to %.1f°C",
+                    baseBatTemp,
+                    charging.customTempLimitC,
+                    effectiveLimiterMa,
+                    resumeTempC
+                )
+            isTempThrottlingNow && charging.customTempThermalMode == CurrentLimiterThermalMode.DYNAMIC_THERMAL_HOLD ->
+                String.format(
+                    java.util.Locale.US,
+                    "DYNAMIC HOLD (%.1f°C / %.1f°C) • Modulating AOSP FCC to %d mA (Resume: %.1f°C)",
+                    baseBatTemp,
+                    charging.customTempLimitC,
+                    effectiveLimiterMa,
+                    resumeTempC
+                )
+            else ->
+                String.format(
+                    java.util.Locale.US,
+                    "Monitoring AOSP Temp: %.1f°C < %.1f°C Limit • Full %d mA Ceiling Allowed",
+                    baseBatTemp,
+                    charging.customTempLimitC,
+                    charging.manualCurrentLimitMa
+                )
+        }
+
+        val isCustomTempPaused = charging.manualCurrentLimiterEnabled &&
+                charging.customTempLimitEnabled &&
+                isTempThrottlingNow &&
+                charging.customTempThermalMode == CurrentLimiterThermalMode.PAUSE_UNTIL_COOLED &&
+                isRealCharging
+
+        // Effective bypass charging: explicit user toggle, night auto-bypass when target reached, night thermal cutoff, or custom limiter thermal pause
         val isBypass = (charging.bypassCharging && isRealCharging) ||
                 (isNightChargingNow && isTargetReached && nightConfig.autoBypassAtTarget && !isTopUpPhase) ||
-                (isNightChargingNow && isNightThermalCutoff)
+                (isNightChargingNow && isNightThermalCutoff) ||
+                isCustomTempPaused
 
         // Determine night charging status text
         val nightStatusText = when {
@@ -1344,13 +1716,24 @@ class KernelRepository private constructor(private val context: Context) {
             else -> String.format(java.util.Locale.US, "Scheduled: Active tonight at %02d:%02d (Target: %d%%)", nightConfig.startHour, nightConfig.startMinute, nightConfig.targetLimitPercent)
         }
 
-        if (nightConfig.isCurrentlyActive != isNightChargingNow || nightConfig.statusDetail != nightStatusText) {
+        if (nightConfig.isCurrentlyActive != isNightChargingNow ||
+            nightConfig.statusDetail != nightStatusText ||
+            charging.isCustomTempThrottlingActive != isTempThrottlingNow ||
+            charging.effectiveEnforcedCurrentMa != effectiveLimiterMa ||
+            charging.customTempStatusText != customTempStatusMsg
+        ) {
             _chargingControlsFlow.value = charging.copy(
+                isCustomTempThrottlingActive = isTempThrottlingNow,
+                effectiveEnforcedCurrentMa = effectiveLimiterMa,
+                customTempStatusText = customTempStatusMsg,
                 nightCharging = nightConfig.copy(
                     isCurrentlyActive = isNightChargingNow,
                     statusDetail = nightStatusText
                 )
             )
+            if (wasTempThrottling != isTempThrottlingNow && charging.manualCurrentLimiterEnabled) {
+                enforceActiveChargingRulesAsync(forceImmediate = true)
+            }
         }
 
         // Normalize BatteryManager current_now (in µA on most Android devices, mA on others)
@@ -1381,29 +1764,39 @@ class KernelRepository private constructor(private val context: Context) {
         }
 
         // Compute Actual Design Capacity, Learned Full Capacity, State of Health %, and Cycle Count
-        val actualDesignCapMah = sysfsChargeFullDesignMah
-            ?: readPowerProfileDesignCapacityMah()
+        val ppDesignCap = readPowerProfileDesignCapacityMah()
+        val actualDesignCapMah = ppDesignCap
+            ?: sysfsChargeFullDesignMah?.takeIf { it in 1000..25000 }
             ?: 5000
 
         val bmCounterMah = normalizeCapacityToMah(rawChargeCounter.toLong())
         val effectiveCounterMah = sysfsChargeCounterMah ?: bmCounterMah
+
+        // Adaptively learn battery capacity from charging and discharging cycles
+        val learnedCapacityMah = loadLearnedBatteryCapacity(actualDesignCapMah)
+        if (effectiveCounterMah != null && effectiveCounterMah > 0) {
+            updateAdaptiveBatteryLearning(batPct, effectiveCounterMah.toLong(), actualDesignCapMah)
+        }
 
         val derivedFullFromCounterMah = if (effectiveCounterMah != null && batPct in 20..100) {
             ((effectiveCounterMah * 100.0) / batPct.toDouble()).roundToInt()
                 .coerceIn((actualDesignCapMah * 0.55).toInt(), (actualDesignCapMah * 1.05).toInt())
         } else null
 
-        val actualLearnedFullMah = sysfsChargeFullMah
+        val actualLearnedFullMah = learnedCapacityMah
+            ?: ppDesignCap
             ?: derivedFullFromCounterMah
-            ?: sysfsSohPercent?.let { (actualDesignCapMah * it) / 100 }
+            ?: sysfsChargeFullMah?.takeIf { it in 1000..25000 }
+            ?: sysfsSohPercent?.takeIf { it in 10..100 }?.let { (actualDesignCapMah * it) / 100 }
             ?: actualDesignCapMah
 
         val actualHealthPercent = sysfsSohPercent?.takeIf { it in 10..100 }
             ?: ((actualLearnedFullMah.toDouble() / actualDesignCapMah.toDouble()) * 100.0).roundToInt().coerceIn(10, 100)
 
-        val actualCycles = sysfsCycleCount?.takeIf { it >= 0 }
-            ?: intentCycleCount.takeIf { it >= 0 }
-            ?: _batteryFlow.value.chargeCycles
+        val actualCycles = intentCycleCount?.takeIf { it > 0 }
+            ?: sysfsCycleCount?.takeIf { it > 0 }
+            ?: _batteryFlow.value.chargeCycles.takeIf { it > 0 }
+            ?: 150
 
         val effectiveHealthStatusText = sysfsHealthStatus?.takeIf { it.isNotBlank() } ?: androidHealthLabel
         val formattedHealthString = "$effectiveHealthStatusText (${actualHealthPercent}% SOH • ${actualLearnedFullMah}/${actualDesignCapMah} mAh)"
@@ -1535,13 +1928,18 @@ class KernelRepository private constructor(private val context: Context) {
             estimatedMinutesLeft = if (!isRealCharging) ((actualRemainingMah / max(100, dischargeMa)) * 60) else 24
         )
 
-        // Randomize slight core clock & load jitter for lively telemetry display
+        // Read real CPU & GPU frequencies on AOSP ROMs when accessible, fallback to profile simulation
         val clusterList = _cpuClustersFlow.value.toMutableList()
         val curPrimeMax = profile.maxCpuFreqPrimeKhz
         val updatedClusters = clusterList.map { c ->
             val maxFreq = if (c.id == 2) curPrimeMax else c.maxFreqKhz
-            val randomFreq = c.availableFrequencies.filter { it <= maxFreq }.random()
-            c.copy(curFreqKhz = randomFreq)
+            val firstCore = c.coreIds.firstOrNull() ?: 0
+            val realCurKhz = readDirectSysfsLong(
+                "/sys/devices/system/cpu/cpu$firstCore/cpufreq/scaling_cur_freq",
+                "/sys/devices/system/cpu/cpufreq/policy$firstCore/scaling_cur_freq"
+            )?.toInt()?.takeIf { it in 100_000..4_500_000 }
+            val freq = realCurKhz ?: c.availableFrequencies.filter { it <= maxFreq }.random()
+            c.copy(curFreqKhz = freq)
         }
         _cpuClustersFlow.value = updatedClusters
 
@@ -1564,7 +1962,14 @@ class KernelRepository private constructor(private val context: Context) {
 
         // Update GPU clock
         val gpuMax = profile.maxGpuFreqMhz
-        val gpuFreq = _gpuConfigFlow.value.availableFrequenciesMhz.filter { it <= gpuMax }.random()
+        val realGpuHz = readDirectSysfsLong(
+            "/sys/class/kgsl/kgsl-3d0/gpuclk",
+            "/sys/class/kgsl/kgsl-3d0/devfreq/cur_freq"
+        )
+        val realGpuMhz = realGpuHz?.let { hz ->
+            if (hz > 1_000_000L) (hz / 1_000_000L).toInt() else if (hz > 1000L) (hz / 1000L).toInt() else hz.toInt()
+        }?.takeIf { it in 100..1500 }
+        val gpuFreq = realGpuMhz ?: _gpuConfigFlow.value.availableFrequenciesMhz.filter { it <= gpuMax }.random()
         _gpuConfigFlow.value = _gpuConfigFlow.value.copy(
             curFreqMhz = gpuFreq,
             loadPercent = when (profile) {
@@ -1573,6 +1978,9 @@ class KernelRepository private constructor(private val context: Context) {
                 else -> Random.nextInt(20, 55)
             }
         )
+
+        // Periodically re-enforce active AOSP charging/thermal rules while charging
+        enforceActiveChargingRulesAsync(forceImmediate = false)
 
         // Update live RAM, zRAM, and GPU VRAM telemetry in-process from /proc/meminfo, ActivityManager, and readable sysfs
         refreshDeviceRamAndVramTelemetrySync()
@@ -1583,63 +1991,79 @@ class KernelRepository private constructor(private val context: Context) {
         _activeProfileFlow.value = profile
         _activeCustomProfileFlow.value = null
         scope.launch {
-            val cmd = StringBuilder()
-            cmd.append("# Applying Dragon Kernel Profile: ${profile.name}\n")
-            if (profile == BatteryProfile.DEFAULT) {
-                // Restore ROM Stock kernel parameters
-                cmd.append("echo 614400 > /sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq 2>/dev/null || true\n")
-                cmd.append("echo 2016000 > /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq 2>/dev/null || true\n")
-                cmd.append("echo 748800 > /sys/devices/system/cpu/cpu3/cpufreq/scaling_min_freq 2>/dev/null || true\n")
-                cmd.append("echo 2800000 > /sys/devices/system/cpu/cpu3/cpufreq/scaling_max_freq 2>/dev/null || true\n")
-                cmd.append("echo 844800 > /sys/devices/system/cpu/cpu7/cpufreq/scaling_min_freq 2>/dev/null || true\n")
-                cmd.append("echo 3014400 > /sys/devices/system/cpu/cpu7/cpufreq/scaling_max_freq 2>/dev/null || true\n")
-                cmd.append("echo 250000000 > /sys/class/kgsl/kgsl-3d0/min_gpuclk 2>/dev/null || true\n")
-                cmd.append("echo 950000000 > /sys/class/kgsl/kgsl-3d0/max_gpuclk 2>/dev/null || true\n")
-                cmd.append("echo msm-adreno-tz > /sys/class/kgsl/kgsl-3d0/devfreq/governor 2>/dev/null || true\n")
-            } else {
-                // CPU frequency policy
-                cmd.append("echo ${profile.maxCpuFreqPrimeKhz} > /sys/devices/system/cpu/cpu7/cpufreq/scaling_max_freq\n")
-                // GPU max clock
-                cmd.append("echo ${profile.maxGpuFreqMhz * 1000000} > /sys/class/kgsl/kgsl-3d0/max_gpuclk\n")
-            }
-            // Governor
+            val granted = RootHelper.grantAllNecessaryPermissions(context.packageName, getPeakSupportedRefreshRate())
+            _isRootGrantedFlow.value = granted || RootHelper.isRootAvailable
             val gov = when (profile) {
                 BatteryProfile.GAMING -> "performance"
                 BatteryProfile.POWER_SAVING -> "powersave"
                 else -> "schedutil"
             }
-            for (i in 0..7) {
-                cmd.append("echo $gov > /sys/devices/system/cpu/cpu$i/cpufreq/scaling_governor 2>/dev/null || true\n")
+            if (profile == BatteryProfile.DEFAULT) {
+                RootHelper.applyAospCpuClusterConfig(listOf(0, 1, 2), 614400, 2016000, "schedutil", lockMaxMin = false)
+                RootHelper.applyAospCpuClusterConfig(listOf(3, 4, 5, 6), 748800, 2800000, "schedutil", lockMaxMin = false)
+                RootHelper.applyAospCpuClusterConfig(listOf(7), 844800, 3014400, "schedutil", lockMaxMin = false)
+                RootHelper.applyAospGpuConfig(minMhz = 250, maxMhz = 950, governor = "msm-adreno-tz")
+            } else {
+                val silverMax = when (profile) {
+                    BatteryProfile.POWER_SAVING -> 1497600
+                    else -> 2016000
+                }
+                val goldMax = when (profile) {
+                    BatteryProfile.POWER_SAVING -> 1958400
+                    BatteryProfile.BALANCED -> 2496000
+                    else -> 2800000
+                }
+                RootHelper.applyAospCpuClusterConfig(listOf(0, 1, 2), 614400, silverMax, gov, lockMaxMin = true)
+                RootHelper.applyAospCpuClusterConfig(listOf(3, 4, 5, 6), 748800, goldMax, gov, lockMaxMin = true)
+                RootHelper.applyAospCpuClusterConfig(listOf(7), 844800, profile.maxCpuFreqPrimeKhz, gov, lockMaxMin = true)
+                RootHelper.applyAospGpuConfig(minMhz = 250, maxMhz = profile.maxGpuFreqMhz, governor = "msm-adreno-tz")
             }
-            RootHelper.executeCommand(cmd.toString())
-            _lastActionFeedbackFlow.value = "Profile activated: ${profile.title}"
+            _lastActionFeedbackFlow.value = if (granted || RootHelper.isRootAvailable) {
+                "Profile activated with Root on AOSP: ${profile.title}"
+            } else {
+                "Profile activated: ${profile.title}"
+            }
         }
     }
 
     fun setCustomBatteryProfile(cProfile: CustomBatteryProfile) {
         _activeCustomProfileFlow.value = cProfile
         scope.launch {
-            val cmd = StringBuilder()
-            cmd.append("# Applying Custom Profile: ${cProfile.title}\n")
-            // Silver cluster (cores 0-2)
-            cmd.append("echo ${cProfile.silverMinFreqKhz} > /sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq\n")
-            cmd.append("echo ${cProfile.silverMaxFreqKhz} > /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq\n")
-            // Gold cluster (cores 3-6)
-            cmd.append("echo ${cProfile.goldMinFreqKhz} > /sys/devices/system/cpu/cpu3/cpufreq/scaling_min_freq\n")
-            cmd.append("echo ${cProfile.goldMaxFreqKhz} > /sys/devices/system/cpu/cpu3/cpufreq/scaling_max_freq\n")
-            // Prime cluster (core 7)
-            cmd.append("echo ${cProfile.primeMinFreqKhz} > /sys/devices/system/cpu/cpu7/cpufreq/scaling_min_freq\n")
-            cmd.append("echo ${cProfile.primeMaxFreqKhz} > /sys/devices/system/cpu/cpu7/cpufreq/scaling_max_freq\n")
-            // GPU
-            cmd.append("echo ${cProfile.gpuMinFreqMhz * 1000000L} > /sys/class/kgsl/kgsl-3d0/min_gpuclk 2>/dev/null || true\n")
-            cmd.append("echo ${cProfile.gpuMaxFreqMhz * 1000000L} > /sys/class/kgsl/kgsl-3d0/max_gpuclk 2>/dev/null || true\n")
-            // Thermal limit
-            cmd.append("echo ${(cProfile.thermalLimitC * 1000).toInt()} > /sys/class/thermal/thermal_zone0/trip_point_0_temp 2>/dev/null || true\n")
-            for (i in 0..7) {
-                cmd.append("echo ${cProfile.governor} > /sys/devices/system/cpu/cpu$i/cpufreq/scaling_governor 2>/dev/null || true\n")
+            val granted = RootHelper.grantAllNecessaryPermissions(context.packageName, getPeakSupportedRefreshRate())
+            _isRootGrantedFlow.value = granted || RootHelper.isRootAvailable
+            RootHelper.applyAospCpuClusterConfig(
+                coreIds = listOf(0, 1, 2),
+                minFreqKhz = cProfile.silverMinFreqKhz,
+                maxFreqKhz = cProfile.silverMaxFreqKhz,
+                governor = cProfile.governor,
+                lockMaxMin = true
+            )
+            RootHelper.applyAospCpuClusterConfig(
+                coreIds = listOf(3, 4, 5, 6),
+                minFreqKhz = cProfile.goldMinFreqKhz,
+                maxFreqKhz = cProfile.goldMaxFreqKhz,
+                governor = cProfile.governor,
+                lockMaxMin = true
+            )
+            RootHelper.applyAospCpuClusterConfig(
+                coreIds = listOf(7),
+                minFreqKhz = cProfile.primeMinFreqKhz,
+                maxFreqKhz = cProfile.primeMaxFreqKhz,
+                governor = cProfile.governor,
+                lockMaxMin = true
+            )
+            RootHelper.applyAospGpuConfig(
+                minMhz = cProfile.gpuMinFreqMhz,
+                maxMhz = cProfile.gpuMaxFreqMhz
+            )
+            RootHelper.executeCommand(
+                "echo ${(cProfile.thermalLimitC * 1000).toInt()} > /sys/class/thermal/thermal_zone0/trip_point_0_temp 2>/dev/null || true"
+            )
+            _lastActionFeedbackFlow.value = if (granted || RootHelper.isRootAvailable) {
+                "Custom Profile activated with Root on AOSP: ${cProfile.title}"
+            } else {
+                "Custom Profile activated: ${cProfile.title}"
             }
-            RootHelper.executeCommand(cmd.toString())
-            _lastActionFeedbackFlow.value = "Custom Profile activated: ${cProfile.title}"
         }
     }
 
@@ -1687,8 +2111,8 @@ class KernelRepository private constructor(private val context: Context) {
 
     fun requestRootForChargingSpeed() {
         scope.launch {
-            val granted = RootHelper.grantRootChargingPermissions(context.packageName)
-            _isRootGrantedFlow.value = granted
+            val granted = RootHelper.grantAllNecessaryPermissions(context.packageName, getPeakSupportedRefreshRate())
+            _isRootGrantedFlow.value = granted || RootHelper.isRootAvailable
             val cur = _chargingControlsFlow.value
             if (cur.manualCurrentLimiterEnabled) {
                 RootHelper.enforceRootChargingCurrentLimit(
@@ -1697,9 +2121,28 @@ class KernelRepository private constructor(private val context: Context) {
                     currentMa = cur.manualCurrentLimitMa,
                     fallbackSpeedModeMa = cur.speedMode.maxCurrentMa,
                     lockReadOnly = cur.lockSysfsNodesReadOnly,
-                    overrideThermalDaemon = cur.overrideRomThermalDaemon,
-                    forcePmicVoter = cur.forcePmicVoterOverride
+                    overrideThermalDaemon = cur.overrideRomThermalDaemon || cur.bypassThermalLimit,
+                    forcePmicVoter = cur.forcePmicVoterOverride,
+                    customTempLimitEnabled = cur.customTempLimitEnabled,
+                    customTempLimitC = cur.customTempLimitC,
+                    currentBatteryTempC = _batteryFlow.value.temperatureC,
+                    thermalMode = cur.customTempThermalMode.name,
+                    fallbackCurrentMa = cur.customTempFallbackCurrentMa,
+                    cooldownDeltaC = cur.customTempCooldownDeltaC,
+                    isTempThrottlingTriggered = cur.isCustomTempThrottlingActive,
+                    externalBypassActive = cur.bypassCharging
                 )
+            }
+            if (cur.bypassThermalLimit) {
+                RootHelper.enforceRootBypassThermalLimit(
+                    packageName = context.packageName,
+                    enabled = true,
+                    maxAllowedCurrentMa = if (cur.manualCurrentLimiterEnabled) cur.manualCurrentLimitMa else cur.speedMode.maxCurrentMa,
+                    isCharging = _batteryFlow.value.isCharging
+                )
+            }
+            if (cur.bypassCharging) {
+                RootHelper.enforceRootBypassCharging(context.packageName, true)
             }
             if (granted) {
                 pollPowerSupplySysfsAsync()
@@ -1707,7 +2150,7 @@ class KernelRepository private constructor(private val context: Context) {
                     "cat /sys/class/power_supply/battery/current_now 2>/dev/null; echo ' / '; cat /sys/class/power_supply/battery/voltage_now 2>/dev/null"
                 )
                 tickTelemetry()
-                _lastActionFeedbackFlow.value = "Root granted & charging permissions unlocked! Reading live /sys/class/power_supply/ (${res.output.replace("\n", "").take(36)})"
+                _lastActionFeedbackFlow.value = "Root & AOSP charging permissions unlocked! Live PMIC: ${res.output.replace("\n", "").take(36)}"
             } else {
                 tickTelemetry()
                 _lastActionFeedbackFlow.value = "Root permission not granted. Reading live BatteryManager hardware telemetry."
@@ -1725,8 +2168,10 @@ class KernelRepository private constructor(private val context: Context) {
             _cpuClustersFlow.value = list
 
             scope.launch {
-                val core = cluster.coreIds.firstOrNull() ?: 0
-                RootHelper.executeCommand("echo $newGov > /sys/devices/system/cpu/cpu$core/cpufreq/scaling_governor")
+                RootHelper.applyAospCpuClusterConfig(
+                    coreIds = cluster.coreIds,
+                    governor = newGov
+                )
                 _lastActionFeedbackFlow.value = "${cluster.name} governor set to $newGov"
             }
         }
@@ -1741,10 +2186,11 @@ class KernelRepository private constructor(private val context: Context) {
             _cpuClustersFlow.value = list
 
             scope.launch {
-                val core = cluster.coreIds.firstOrNull() ?: 0
-                RootHelper.executeCommand(
-                    "echo $minFreqKhz > /sys/devices/system/cpu/cpu$core/cpufreq/scaling_min_freq; " +
-                            "echo $maxFreqKhz > /sys/devices/system/cpu/cpu$core/cpufreq/scaling_max_freq"
+                RootHelper.applyAospCpuClusterConfig(
+                    coreIds = cluster.coreIds,
+                    minFreqKhz = minFreqKhz,
+                    maxFreqKhz = maxFreqKhz,
+                    lockMaxMin = true
                 )
                 _lastActionFeedbackFlow.value = "${cluster.name} clocks set: ${minFreqKhz / 1000}MHz - ${maxFreqKhz / 1000}MHz"
             }
@@ -1778,7 +2224,7 @@ class KernelRepository private constructor(private val context: Context) {
 
             scope.launch {
                 val state = if (online) 1 else 0
-                RootHelper.executeCommand("echo $state > /sys/devices/system/cpu/cpu$coreId/online")
+                RootHelper.executeCommand("chmod 0666 /sys/devices/system/cpu/cpu$coreId/online 2>/dev/null || true; echo $state > /sys/devices/system/cpu/cpu$coreId/online")
                 _lastActionFeedbackFlow.value = "Core $coreId ${if (online) "Online" else "Offline"}"
             }
         }
@@ -1807,27 +2253,27 @@ class KernelRepository private constructor(private val context: Context) {
 
     // GPU Tuning
     fun updateGpuMinClock(minMhz: Int) {
-        _gpuConfigFlow.value = _gpuConfigFlow.value.copy(minFreqMhz = max(250, minMhz))
+        val clamped = max(250, minMhz)
+        _gpuConfigFlow.value = _gpuConfigFlow.value.copy(minFreqMhz = clamped)
         scope.launch {
-            val hz = minMhz * 1000000L
-            RootHelper.executeCommand("echo $hz > /sys/class/kgsl/kgsl-3d0/min_gpuclk 2>/dev/null || echo $hz > /sys/class/kgsl/kgsl-3d0/devfreq/min_freq 2>/dev/null")
-            _lastActionFeedbackFlow.value = "Adreno 735 Lowest Clock floor set to $minMhz MHz"
+            RootHelper.applyAospGpuConfig(minMhz = clamped)
+            _lastActionFeedbackFlow.value = "Adreno 735 Lowest Clock floor set to $clamped MHz"
         }
     }
 
     fun updateGpuMaxClock(maxMhz: Int) {
-        _gpuConfigFlow.value = _gpuConfigFlow.value.copy(maxFreqMhz = min(1100, maxMhz))
+        val clamped = min(1100, maxMhz)
+        _gpuConfigFlow.value = _gpuConfigFlow.value.copy(maxFreqMhz = clamped)
         scope.launch {
-            val hz = maxMhz * 1000000L
-            RootHelper.executeCommand("echo $hz > /sys/class/kgsl/kgsl-3d0/max_gpuclk")
-            _lastActionFeedbackFlow.value = "Adreno 735 Max Clock locked to $maxMhz MHz"
+            RootHelper.applyAospGpuConfig(maxMhz = clamped)
+            _lastActionFeedbackFlow.value = "Adreno 735 Max Clock locked to $clamped MHz"
         }
     }
 
     fun updateGpuGovernor(gov: String) {
         _gpuConfigFlow.value = _gpuConfigFlow.value.copy(governor = gov)
         scope.launch {
-            RootHelper.executeCommand("echo $gov > /sys/class/kgsl/kgsl-3d0/devfreq/governor")
+            RootHelper.applyAospGpuConfig(governor = gov)
             _lastActionFeedbackFlow.value = "GPU Governor set to $gov"
         }
     }
@@ -1845,10 +2291,7 @@ class KernelRepository private constructor(private val context: Context) {
                 "AGGRESSIVE" -> 3
                 else -> 2
             }
-            RootHelper.executeCommand(
-                "echo $boostVal > /sys/class/kgsl/kgsl-3d0/devfreq/adrenoboost 2>/dev/null || " +
-                        "echo $boostVal > /sys/class/kgsl/kgsl-3d0/adrenoboost 2>/dev/null"
-            )
+            RootHelper.applyAospGpuConfig(adrenoBoostVal = boostVal)
             _lastActionFeedbackFlow.value = if (enabled) "GPU AdrenoBoost set to $level (Level $boostVal)" else "GPU AdrenoBoost Disabled"
         }
     }
@@ -1857,10 +2300,7 @@ class KernelRepository private constructor(private val context: Context) {
         val clamped = powerLevel.coerceIn(0, 3)
         _gpuConfigFlow.value = _gpuConfigFlow.value.copy(powerLevel = clamped)
         scope.launch {
-            RootHelper.executeCommand(
-                "echo $clamped > /sys/class/kgsl/kgsl-3d0/default_pwrlevel 2>/dev/null; " +
-                        "echo $clamped > /sys/class/kgsl/kgsl-3d0/min_pwrlevel 2>/dev/null"
-            )
+            RootHelper.applyAospGpuConfig(powerLevel = clamped)
             val label = when (clamped) {
                 0 -> "PwrLevel 0 (Turbo Peak 1100 MHz)"
                 1 -> "PwrLevel 1 (High Performance 900 MHz)"
@@ -1944,23 +2384,14 @@ class KernelRepository private constructor(private val context: Context) {
         _adrenoCpuBoostFlow.value = defaultBoost
 
         scope.launch {
+            RootHelper.applyAospCpuClusterConfig(listOf(0, 1, 2), 614400, 2016000, "schedutil", lockMaxMin = false)
+            RootHelper.applyAospCpuClusterConfig(listOf(3, 4, 5, 6), 748800, 2800000, "schedutil", lockMaxMin = false)
+            RootHelper.applyAospCpuClusterConfig(listOf(7), 844800, 3014400, "schedutil", lockMaxMin = false)
+
             val cmd = StringBuilder()
-            // Reset CPU governors and frequencies
-            cmd.append("echo schedutil > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || true\n")
-            cmd.append("echo 614400 > /sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq 2>/dev/null || true\n")
-            cmd.append("echo 2016000 > /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq 2>/dev/null || true\n")
-
-            cmd.append("echo schedutil > /sys/devices/system/cpu/cpu3/cpufreq/scaling_governor 2>/dev/null || true\n")
-            cmd.append("echo 748800 > /sys/devices/system/cpu/cpu3/cpufreq/scaling_min_freq 2>/dev/null || true\n")
-            cmd.append("echo 2800000 > /sys/devices/system/cpu/cpu3/cpufreq/scaling_max_freq 2>/dev/null || true\n")
-
-            cmd.append("echo schedutil > /sys/devices/system/cpu/cpu7/cpufreq/scaling_governor 2>/dev/null || true\n")
-            cmd.append("echo 844800 > /sys/devices/system/cpu/cpu7/cpufreq/scaling_min_freq 2>/dev/null || true\n")
-            cmd.append("echo 3014400 > /sys/devices/system/cpu/cpu7/cpufreq/scaling_max_freq 2>/dev/null || true\n")
-
             // Re-online all 8 cores
             for (i in 0..7) {
-                cmd.append("echo 1 > /sys/devices/system/cpu/cpu$i/online 2>/dev/null || true\n")
+                cmd.append("chmod 0666 /sys/devices/system/cpu/cpu$i/online 2>/dev/null || true; echo 1 > /sys/devices/system/cpu/cpu$i/online 2>/dev/null || true\n")
             }
 
             // Restore boost parameters
@@ -1985,19 +2416,17 @@ class KernelRepository private constructor(private val context: Context) {
         _gpuConfigFlow.value = defaultConfig
 
         scope.launch {
+            RootHelper.applyAospGpuConfig(
+                minMhz = 250,
+                maxMhz = 1100,
+                governor = "msm-adreno-tz",
+                adrenoBoostVal = 2,
+                powerLevel = 0
+            )
             val cmd = StringBuilder()
-            cmd.append("echo 250000000 > /sys/class/kgsl/kgsl-3d0/min_gpuclk 2>/dev/null || echo 250000000 > /sys/class/kgsl/kgsl-3d0/devfreq/min_freq 2>/dev/null || true\n")
-            cmd.append("echo 1100000000 > /sys/class/kgsl/kgsl-3d0/max_gpuclk 2>/dev/null || true\n")
-            cmd.append("echo msm-adreno-tz > /sys/class/kgsl/kgsl-3d0/devfreq/governor 2>/dev/null || true\n")
-            cmd.append("echo 2 > /sys/class/kgsl/kgsl-3d0/devfreq/adrenoboost 2>/dev/null || echo 2 > /sys/class/kgsl/kgsl-3d0/adrenoboost 2>/dev/null || true\n")
-            cmd.append("echo 0 > /sys/class/kgsl/kgsl-3d0/default_pwrlevel 2>/dev/null || true\n")
-            cmd.append("echo 0 > /sys/class/kgsl/kgsl-3d0/min_pwrlevel 2>/dev/null || true\n")
-
-            // Reset voltage offsets
             defaultConfig.customVoltageOffsets.forEach { (freq, offset) ->
                 cmd.append("echo $freq $offset > /sys/class/kgsl/kgsl-3d0/custom_volt_table 2>/dev/null || true\n")
             }
-
             RootHelper.executeCommand(cmd.toString())
             _lastActionFeedbackFlow.value = "Adreno 735 GPU clocks (250-1100 MHz), governor & voltages restored to default"
         }
@@ -2013,6 +2442,8 @@ class KernelRepository private constructor(private val context: Context) {
         val cur = _chargingControlsFlow.value
         _chargingControlsFlow.value = cur.copy(speedMode = mode)
         scope.launch {
+            val granted = RootHelper.grantRootChargingPermissions(context.packageName)
+            _isRootGrantedFlow.value = granted || RootHelper.isRootAvailable
             if (!cur.manualCurrentLimiterEnabled) {
                 RootHelper.enforceRootChargingCurrentLimit(
                     packageName = context.packageName,
@@ -2021,7 +2452,7 @@ class KernelRepository private constructor(private val context: Context) {
                     fallbackSpeedModeMa = mode.maxCurrentMa
                 )
                 tickTelemetry()
-                _lastActionFeedbackFlow.value = "Charging speed updated: ${mode.label} (${mode.maxWattage}W)"
+                _lastActionFeedbackFlow.value = "Charging speed updated on AOSP: ${mode.label} (${mode.maxWattage}W / ${mode.maxCurrentMa}mA)"
             } else {
                 _lastActionFeedbackFlow.value = "Fallback preset set to ${mode.label} (Custom Current Limiter still overriding ROM default)"
             }
@@ -2032,130 +2463,222 @@ class KernelRepository private constructor(private val context: Context) {
         _chargingControlsFlow.value = _chargingControlsFlow.value.copy(bypassCharging = enable)
         tickTelemetry()
         scope.launch {
-            val flag = if (enable) 1 else 0
-            // Stops charging the battery while keeping USB device powered directly
-            RootHelper.executeCommand(
-                "chmod 0666 /sys/class/power_supply/battery/input_suspend /sys/class/qcom-battery/input_suspend 2>/dev/null || true; " +
-                        "echo $flag > /sys/class/power_supply/battery/input_suspend 2>/dev/null || " +
-                        "echo $flag > /sys/class/qcom-battery/input_suspend 2>/dev/null"
-            )
-            _lastActionFeedbackFlow.value = if (enable) "Bypass Charging Activated (Zero Battery Heat)" else "Bypass Charging Disabled"
+            val granted = RootHelper.grantRootChargingPermissions(context.packageName)
+            _isRootGrantedFlow.value = granted || RootHelper.isRootAvailable
+            RootHelper.enforceRootBypassCharging(context.packageName, enable)
+            lastEnforcedBypassState = enable
+            pollPowerSupplySysfsAsync()
+            tickTelemetry()
+            _lastActionFeedbackFlow.value = if (enable) {
+                "AOSP Bypass Charging Activated (Direct USB Power • 0 mA Battery Stress)"
+            } else {
+                "Bypass Charging Disabled • Normal Battery Charging Restored"
+            }
         }
     }
 
     fun toggleBypassThermalLimit(enable: Boolean) {
         val cur = _chargingControlsFlow.value
-        val statusText = if (enable) {
-            "Root Thermal Bypass Active • system_temp_level=0 & cooling_device*=0 Locked (0444)"
+        val isCharging = _batteryFlow.value.isCharging
+        val maxMa = if (cur.manualCurrentLimiterEnabled) cur.manualCurrentLimitMa else cur.speedMode.maxCurrentMa
+        val initialStatus = if (enable) {
+            if (isCharging) "Applying Root Thermal Bypass on AOSP (system_temp_level=0 & cooling_device*=0)..."
+            else "Thermal Bypass Armed • Will lock AOSP thermal charging throttles at 0 upon charging"
         } else {
-            "Standby • ROM Default Thermal Throttling Active"
-        }
-        val cmdText = if (enable) {
-            "echo 0 > system_temp_level, charge_control_limit, temp_state & cooling_device*/cur_state -> chmod 0444"
-        } else {
-            "chmod 0644 & echo 0 > thermal_limit_bypass & thermal_remove"
+            "Standby • Standard AOSP ROM Thermal Throttling Restored"
         }
         _chargingControlsFlow.value = cur.copy(
             bypassThermalLimit = enable,
-            thermalBypassStatus = statusText,
-            lastThermalBypassCommand = cmdText
+            thermalBypassStatus = initialStatus,
+            lastThermalBypassCommand = "/sys/class/power_supply/battery/system_temp_level & /sys/class/thermal/cooling_device*/cur_state"
         )
         tickTelemetry()
+
         scope.launch {
             val granted = RootHelper.grantRootChargingPermissions(context.packageName)
-            _isRootGrantedFlow.value = granted
-            val maxAllowedMa = if (cur.manualCurrentLimiterEnabled) cur.manualCurrentLimitMa else cur.speedMode.maxCurrentMa
-            RootHelper.enforceRootBypassThermalLimit(
+            _isRootGrantedFlow.value = granted || RootHelper.isRootAvailable
+            val res = RootHelper.enforceRootBypassThermalLimit(
                 packageName = context.packageName,
                 enabled = enable,
-                maxAllowedCurrentMa = maxAllowedMa
+                maxAllowedCurrentMa = maxMa,
+                isCharging = _batteryFlow.value.isCharging
+            )
+            val appliedSummary = res.output.substringAfter("THERMAL_BYPASS_ACTIVE:", "").trim()
+                .ifEmpty { "system_temp_level=0 charge_control_limit=0 cooling_device=0" }
+            val updatedStatus = if (enable) {
+                if (granted || RootHelper.isRootAvailable) {
+                    "AOSP Root Thermal Bypass Active • Locked Read-Only ($appliedSummary)"
+                } else {
+                    "Thermal Bypass Armed (Grant Root Access to lock AOSP sysfs thermal voters)"
+                }
+            } else {
+                "Standby • Standard AOSP ROM Thermal Engine Active"
+            }
+            _chargingControlsFlow.value = _chargingControlsFlow.value.copy(
+                bypassThermalLimit = enable,
+                thermalBypassStatus = updatedStatus,
+                lastThermalBypassCommand = appliedSummary
             )
             pollPowerSupplySysfsAsync()
             tickTelemetry()
             _lastActionFeedbackFlow.value = if (enable) {
-                if (granted) "Root Granted: Thermal Charge Limit Bypassed & Locked (chmod 0444)"
-                else "Thermal Charge Limit Bypassed"
+                "AOSP Thermal Charging Limit Bypass Enabled ($appliedSummary)"
             } else {
-                "Standard ROM Thermal Charging Limit Restored"
+                "Standard AOSP Thermal Charging Engine Restored"
             }
         }
     }
 
     fun forceRootBypassThermalLimit() {
-        scope.launch {
-            val granted = RootHelper.grantRootChargingPermissions(context.packageName)
-            _isRootGrantedFlow.value = granted
-            val cur = _chargingControlsFlow.value
-            val maxAllowedMa = if (cur.manualCurrentLimiterEnabled) cur.manualCurrentLimitMa else cur.speedMode.maxCurrentMa
-            RootHelper.enforceRootBypassThermalLimit(
-                packageName = context.packageName,
-                enabled = true,
-                maxAllowedCurrentMa = maxAllowedMa
-            )
-            _chargingControlsFlow.value = cur.copy(
-                bypassThermalLimit = true,
-                thermalBypassStatus = if (granted) {
-                    "Root Thermal Bypass Locked (0444): system_temp_level=0 • cooling_device*=0 • PMIC Unthrottled"
-                } else {
-                    "Thermal Bypass Enforced: system_temp_level=0 & cooling_device*=0"
-                },
-                lastThermalBypassCommand = "su -c: echo 0 > system_temp_level, charge_control_limit, temp_state, cooling_device*/cur_state && chmod 0444"
-            )
-            pollPowerSupplySysfsAsync()
-            tickTelemetry()
-            _lastActionFeedbackFlow.value = if (granted) {
-                "Root Granted & Thermal Charging Limit Bypass Locked (0444)!"
-            } else {
-                "Thermal Charging Limit Bypass Enforced!"
-            }
-        }
+        toggleBypassThermalLimit(true)
     }
 
     fun setManualCurrentLimiter(enabled: Boolean, currentMa: Int) {
         val clampedMa = currentMa.coerceIn(1100, 20000)
-        val microAmps = clampedMa * 1000L
         val cur = _chargingControlsFlow.value
-
-        val lockBadge = if (cur.lockSysfsNodesReadOnly) "chmod 0444 Locked" else "Writable"
-        val pmicBadge = if (cur.forcePmicVoterOverride) " + PMIC FCC Voter" else ""
+        val batTemp = _batteryFlow.value.temperatureC
+        val resumeTempC = (cur.customTempLimitC - cur.customTempCooldownDeltaC).coerceAtLeast(25.0f)
+        val isTempTriggered = cur.customTempLimitEnabled && (
+                batTemp >= cur.customTempLimitC ||
+                        (cur.isCustomTempThrottlingActive && batTemp > resumeTempC)
+                )
+        val safeFallbackMa = min(clampedMa, cur.customTempFallbackCurrentMa)
+        val effectiveMa = when {
+            !enabled -> cur.speedMode.maxCurrentMa
+            !cur.customTempLimitEnabled || !isTempTriggered -> clampedMa
+            cur.customTempThermalMode == CurrentLimiterThermalMode.PAUSE_UNTIL_COOLED -> 0
+            cur.customTempThermalMode == CurrentLimiterThermalMode.SMART_STEP_DOWN -> safeFallbackMa
+            else -> min(clampedMa, max(safeFallbackMa, (clampedMa * 0.65f).toInt()))
+        }
+        val targetUa = effectiveMa * 1000L
         val statusMsg = if (enabled) {
-            "Overriding ROM Default Ceiling: ${clampedMa} mA Limit • $lockBadge$pmicBadge"
+            if (cur.customTempLimitEnabled && isTempTriggered) {
+                "Applying AOSP Thermal-Controlled Limit: $effectiveMa mA (Temp ${String.format(java.util.Locale.US, "%.1f°C >= %.1f°C", batTemp, cur.customTempLimitC)})..."
+            } else {
+                "Applying AOSP Current Ceiling: $clampedMa mA ($targetUa µA • Temp Limit ${String.format(java.util.Locale.US, "%.1f°C", cur.customTempLimitC)})..."
+            }
         } else {
-            "Standby • ROM Default Charging Active (${cur.speedMode.label})"
-        }
-        val cmdSummary = if (enabled) {
-            "echo $microAmps > constant_charge_current_max & restrict_cur ($lockBadge)"
-        } else {
-            "chmod 0666 & echo ${cur.speedMode.maxCurrentMa * 1000L} > constant_charge_current_max"
+            "Standard AOSP Charging Active (${cur.speedMode.label})"
         }
 
-        _chargingControlsFlow.value = cur.copy(
+        val updatedControls = cur.copy(
             manualCurrentLimiterEnabled = enabled,
             manualCurrentLimitMa = clampedMa,
+            isCustomTempThrottlingActive = isTempTriggered,
+            effectiveEnforcedCurrentMa = effectiveMa,
             romDefaultOverridden = enabled,
             activeOverrideStatus = statusMsg,
-            lastRootOverrideCommand = cmdSummary
+            lastRootOverrideCommand = "/sys/class/power_supply/{battery,usb,main}/constant_charge_current_max ($targetUa µA)"
         )
+        _chargingControlsFlow.value = updatedControls
+        saveChargingControlsPrefs(updatedControls)
         tickTelemetry()
 
         scope.launch {
             val granted = RootHelper.grantRootChargingPermissions(context.packageName)
-            _isRootGrantedFlow.value = granted
-            RootHelper.enforceRootChargingCurrentLimit(
+            _isRootGrantedFlow.value = granted || RootHelper.isRootAvailable
+            val latest = _chargingControlsFlow.value
+            val liveTemp = _batteryFlow.value.temperatureC
+            val res = RootHelper.enforceRootChargingCurrentLimit(
                 packageName = context.packageName,
                 enabled = enabled,
                 currentMa = clampedMa,
-                fallbackSpeedModeMa = cur.speedMode.maxCurrentMa,
-                lockReadOnly = cur.lockSysfsNodesReadOnly,
-                overrideThermalDaemon = cur.overrideRomThermalDaemon,
-                forcePmicVoter = cur.forcePmicVoterOverride
+                fallbackSpeedModeMa = latest.speedMode.maxCurrentMa,
+                lockReadOnly = latest.lockSysfsNodesReadOnly,
+                overrideThermalDaemon = latest.overrideRomThermalDaemon || latest.bypassThermalLimit,
+                forcePmicVoter = latest.forcePmicVoterOverride,
+                customTempLimitEnabled = latest.customTempLimitEnabled,
+                customTempLimitC = latest.customTempLimitC,
+                currentBatteryTempC = liveTemp,
+                thermalMode = latest.customTempThermalMode.name,
+                fallbackCurrentMa = latest.customTempFallbackCurrentMa,
+                cooldownDeltaC = latest.customTempCooldownDeltaC,
+                isTempThrottlingTriggered = latest.isCustomTempThrottlingActive,
+                externalBypassActive = latest.bypassCharging
             )
+            val appliedInfo = res.output.substringAfter("->", "").trim()
+                .ifEmpty { "constant_charge_current_max input_current_limit temp_warm" }
+            val finalStatus = if (enabled) {
+                if (granted || RootHelper.isRootAvailable) {
+                    if (latest.customTempLimitEnabled && latest.isCustomTempThrottlingActive) {
+                        "AOSP Thermal Limit Enforced: ${latest.effectiveEnforcedCurrentMa} mA @ ${String.format(java.util.Locale.US, "%.1f°C (Cap %.1f°C)", liveTemp, latest.customTempLimitC)} • $appliedInfo"
+                    } else if (latest.customTempLimitEnabled) {
+                        "AOSP Root Limit Enforced: $clampedMa mA (Temp Guard: ${String.format(java.util.Locale.US, "%.1f°C", latest.customTempLimitC)}) • $appliedInfo"
+                    } else {
+                        "AOSP Root Limit Enforced: $clampedMa mA (${targetUa / 1000}k µA) • Nodes: $appliedInfo"
+                    }
+                } else {
+                    "Target Set: $clampedMa mA • Temp Guard ${String.format(java.util.Locale.US, "%.1f°C", latest.customTempLimitC)} (Grant Root Access for AOSP PMIC)"
+                }
+            } else {
+                "Standard AOSP Charging Active (${latest.speedMode.label} • ${latest.speedMode.maxCurrentMa} mA)"
+            }
+            val finalControls = _chargingControlsFlow.value.copy(
+                manualCurrentLimiterEnabled = enabled,
+                manualCurrentLimitMa = clampedMa,
+                romDefaultOverridden = enabled && (granted || RootHelper.isRootAvailable),
+                activeOverrideStatus = finalStatus,
+                lastRootOverrideCommand = appliedInfo
+            )
+            _chargingControlsFlow.value = finalControls
+            saveChargingControlsPrefs(finalControls)
             pollPowerSupplySysfsAsync()
             tickTelemetry()
             _lastActionFeedbackFlow.value = if (enabled) {
-                "ROM Default Overridden -> Custom Current Limiter ceiling set to ${clampedMa} mA"
+                if (latest.customTempLimitEnabled) {
+                    "AOSP Current Limiter (${clampedMa}mA) + Temp Limit (${String.format(java.util.Locale.US, "%.1f°C", latest.customTempLimitC)}) Enforced"
+                } else {
+                    "AOSP Custom Current Limiter Enforced: $clampedMa mA ($appliedInfo)"
+                }
             } else {
-                "Custom Current Limiter Disabled (Restored ROM Default)"
+                "Custom Current Limiter Disabled • Restored ${latest.speedMode.label}"
+            }
+        }
+    }
+
+    fun updateCustomLimiterTempConfig(
+        tempLimitEnabled: Boolean = _chargingControlsFlow.value.customTempLimitEnabled,
+        tempLimitC: Float = _chargingControlsFlow.value.customTempLimitC,
+        thermalMode: CurrentLimiterThermalMode = _chargingControlsFlow.value.customTempThermalMode,
+        fallbackCurrentMa: Int = _chargingControlsFlow.value.customTempFallbackCurrentMa,
+        cooldownDeltaC: Float = _chargingControlsFlow.value.customTempCooldownDeltaC
+    ) {
+        val cur = _chargingControlsFlow.value
+        val clampedTempC = ((tempLimitC * 2f).roundToInt() / 2f).coerceIn(32.0f, 48.0f)
+        val clampedFallbackMa = ((fallbackCurrentMa / 100) * 100).coerceIn(1100, 10000)
+        val clampedCooldownC = ((cooldownDeltaC * 2f).roundToInt() / 2f).coerceIn(1.0f, 4.0f)
+        val batTemp = _batteryFlow.value.temperatureC
+        val resumeTempC = (clampedTempC - clampedCooldownC).coerceAtLeast(25.0f)
+        val isTriggered = tempLimitEnabled && (
+                batTemp >= clampedTempC ||
+                        (cur.isCustomTempThrottlingActive && batTemp > resumeTempC)
+                )
+
+        val updated = cur.copy(
+            customTempLimitEnabled = tempLimitEnabled,
+            customTempLimitC = clampedTempC,
+            customTempThermalMode = thermalMode,
+            customTempFallbackCurrentMa = clampedFallbackMa,
+            customTempCooldownDeltaC = clampedCooldownC,
+            isCustomTempThrottlingActive = isTriggered
+        )
+        _chargingControlsFlow.value = updated
+        saveChargingControlsPrefs(updated)
+        tickTelemetry()
+
+        if (cur.manualCurrentLimiterEnabled) {
+            setManualCurrentLimiter(true, cur.manualCurrentLimitMa)
+        } else {
+            _lastActionFeedbackFlow.value = if (tempLimitEnabled) {
+                String.format(
+                    java.util.Locale.US,
+                    "Custom Limiter Temp Guard set to %.1f°C (%s • Fallback: %d mA)",
+                    clampedTempC,
+                    thermalMode.shortTitle,
+                    clampedFallbackMa
+                )
+            } else {
+                "Custom Limiter Temperature Guard Disabled"
             }
         }
     }
@@ -2166,50 +2689,22 @@ class KernelRepository private constructor(private val context: Context) {
         forcePmicVoter: Boolean = _chargingControlsFlow.value.forcePmicVoterOverride
     ) {
         val cur = _chargingControlsFlow.value
-        _chargingControlsFlow.value = cur.copy(
+        val updated = cur.copy(
             lockSysfsNodesReadOnly = lockReadOnly,
             overrideRomThermalDaemon = overrideThermalDaemon,
             forcePmicVoterOverride = forcePmicVoter
         )
+        _chargingControlsFlow.value = updated
+        saveChargingControlsPrefs(updated)
         if (cur.manualCurrentLimiterEnabled) {
             setManualCurrentLimiter(true, cur.manualCurrentLimitMa)
         }
     }
 
     fun forceRootOverrideCurrentLimiter() {
-        scope.launch {
-            val granted = RootHelper.grantRootChargingPermissions(context.packageName)
-            _isRootGrantedFlow.value = granted
-            val cur = _chargingControlsFlow.value
-            val clampedMa = cur.manualCurrentLimitMa.coerceIn(1100, 20000)
-            val microAmps = clampedMa * 1000L
-
-            RootHelper.enforceRootChargingCurrentLimit(
-                packageName = context.packageName,
-                enabled = true,
-                currentMa = clampedMa,
-                fallbackSpeedModeMa = cur.speedMode.maxCurrentMa,
-                lockReadOnly = cur.lockSysfsNodesReadOnly,
-                overrideThermalDaemon = cur.overrideRomThermalDaemon,
-                forcePmicVoter = cur.forcePmicVoterOverride
-            )
-
-            val statusMsg = if (granted) {
-                "Root Override Active: ${clampedMa} mA Ceiling • Locked (0444) + PMIC FCC + Thermal Bypass"
-            } else {
-                "Override Active: ${clampedMa} mA Ceiling • Enforced over ROM Default"
-            }
-            _chargingControlsFlow.value = cur.copy(
-                manualCurrentLimiterEnabled = true,
-                manualCurrentLimitMa = clampedMa,
-                romDefaultOverridden = true,
-                activeOverrideStatus = statusMsg,
-                lastRootOverrideCommand = "chmod 0666 -> echo $microAmps > constant_charge_current_max & PMIC FCC -> chmod 0444"
-            )
-            pollPowerSupplySysfsAsync()
-            tickTelemetry()
-            _lastActionFeedbackFlow.value = "Forced Root Current Limiter Override: ${clampedMa} mA ceiling locked over ROM default!"
-        }
+        val cur = _chargingControlsFlow.value
+        val clampedMa = cur.manualCurrentLimitMa.coerceIn(1100, 20000)
+        setManualCurrentLimiter(true, clampedMa)
     }
 
     // Night Charging Controls
@@ -2217,9 +2712,17 @@ class KernelRepository private constructor(private val context: Context) {
         val current = _chargingControlsFlow.value
         _chargingControlsFlow.value = current.copy(nightCharging = config)
         scope.launch {
-            if (config.isEnabled && config.muteChargingLed) {
-                RootHelper.executeCommand("echo 0 > /sys/class/leds/charging/brightness 2>/dev/null")
+            if (config.isEnabled) {
+                RootHelper.grantRootChargingPermissions(context.packageName)
             }
+            if (config.isEnabled && config.muteChargingLed) {
+                RootHelper.executeCommand(
+                    "echo 0 > /sys/class/leds/charging/brightness 2>/dev/null || " +
+                            "echo 0 > /sys/class/leds/red/brightness 2>/dev/null || " +
+                            "echo 0 > /sys/class/leds/battery-led/brightness 2>/dev/null || true"
+                )
+            }
+            enforceActiveChargingRulesAsync(forceImmediate = true)
             _lastActionFeedbackFlow.value = if (config.isEnabled) {
                 String.format(
                     java.util.Locale.US,
@@ -2495,6 +2998,8 @@ class KernelRepository private constructor(private val context: Context) {
             currentResolution = label
         )
         scope.launch {
+            val hasRoot = RootHelper.refreshRootStatus()
+            _isRootGrantedFlow.value = hasRoot
             if (width == 1220 && height == 2712) {
                 RootHelper.executeCommand("wm size reset && wm density reset")
             } else {
@@ -2523,12 +3028,14 @@ class KernelRepository private constructor(private val context: Context) {
         if (selected.isEmpty()) return
 
         scope.launch {
+            val hasRoot = RootHelper.refreshRootStatus()
+            _isRootGrantedFlow.value = hasRoot
             val cmd = StringBuilder()
             for (app in selected) {
                 if (freeze) {
-                    cmd.append("pm disable-user --user 0 ${app.packageName} 2>/dev/null || cmd package suspend ${app.packageName}\n")
+                    cmd.append("cmd package disable-user --user 0 ${app.packageName} 2>/dev/null || pm disable-user --user 0 ${app.packageName} 2>/dev/null || cmd package suspend --user 0 ${app.packageName} 2>/dev/null || am force-stop ${app.packageName} 2>/dev/null\n")
                 } else {
-                    cmd.append("pm enable ${app.packageName} 2>/dev/null || cmd package unsuspend ${app.packageName}\n")
+                    cmd.append("cmd package enable --user 0 ${app.packageName} 2>/dev/null || pm enable --user 0 ${app.packageName} 2>/dev/null || pm enable ${app.packageName} 2>/dev/null || cmd package unsuspend --user 0 ${app.packageName} 2>/dev/null\n")
                 }
             }
             RootHelper.executeCommand(cmd.toString())
@@ -2537,7 +3044,7 @@ class KernelRepository private constructor(private val context: Context) {
                 if (it.isSelected) it.copy(isFrozen = freeze, isSelected = false) else it
             }
             _appsFlow.value = updated
-            _lastActionFeedbackFlow.value = "${selected.size} apps ${if (freeze) "frozen" else "unfrozen"}"
+            _lastActionFeedbackFlow.value = "${selected.size} apps ${if (freeze) "frozen" else "unfrozen"} on AOSP"
         }
     }
 
@@ -2550,9 +3057,19 @@ class KernelRepository private constructor(private val context: Context) {
             _appsFlow.value = list
 
             scope.launch {
+                val hasRoot = RootHelper.refreshRootStatus()
+                _isRootGrantedFlow.value = hasRoot
                 val mode = if (restrict) "ignore" else "allow"
-                RootHelper.executeCommand("appops set $packageName BOOT_COMPLETED $mode; appops set $packageName RUN_IN_BACKGROUND $mode")
-                _lastActionFeedbackFlow.value = "Autostart ${if (restrict) "restricted" else "allowed"} for ${list[index].appName}"
+                val standbyBucket = if (restrict) "restricted" else "active"
+                val cmd = """
+                    appops set $packageName BOOT_COMPLETED $mode 2>/dev/null || cmd appops set $packageName BOOT_COMPLETED $mode 2>/dev/null || true
+                    appops set $packageName RUN_IN_BACKGROUND $mode 2>/dev/null || cmd appops set $packageName RUN_IN_BACKGROUND $mode 2>/dev/null || true
+                    appops set $packageName RUN_ANY_IN_BACKGROUND $mode 2>/dev/null || cmd appops set $packageName RUN_ANY_IN_BACKGROUND $mode 2>/dev/null || true
+                    appops set $packageName START_FOREGROUND $mode 2>/dev/null || true
+                    am set-standby-bucket $packageName $standbyBucket 2>/dev/null || true
+                """.trimIndent()
+                RootHelper.executeCommand(cmd)
+                _lastActionFeedbackFlow.value = "Autostart & background wake ${if (restrict) "restricted" else "allowed"} for ${list[index].appName}"
             }
         }
     }
@@ -2942,16 +3459,18 @@ class KernelRepository private constructor(private val context: Context) {
         _dexOptConfigFlow.value = DexOptConfig(
             mode = mode,
             isRunning = true,
-            progressMessage = "Compiling ART bytecode (filter: $mode)...",
+            progressMessage = "Compiling ART bytecode on AOSP (filter: $mode)...",
             lastOutput = ""
         )
         scope.launch {
-            val result = RootHelper.executeCommand("cmd package compile -m $mode -a")
+            val hasRoot = RootHelper.refreshRootStatus()
+            _isRootGrantedFlow.value = hasRoot
+            val result = RootHelper.executeCommand("cmd package compile -m $mode -f -a 2>&1 || pm compile -m $mode -f -a 2>&1")
             _dexOptConfigFlow.value = DexOptConfig(
                 mode = mode,
                 isRunning = false,
                 progressMessage = "Compilation finished with exit code ${result.exitCode}",
-                lastOutput = result.output.ifBlank { "Optimized packages using $mode filter successfully." }
+                lastOutput = result.output.ifBlank { "Optimized all AOSP packages using $mode filter successfully." }
             )
             _lastActionFeedbackFlow.value = "DexOpt $mode completed"
         }
@@ -3238,7 +3757,19 @@ class KernelRepository private constructor(private val context: Context) {
         scope.launch {
             val granted = RootHelper.refreshRootStatus()
             _isRootGrantedFlow.value = granted
-            _lastActionFeedbackFlow.value = if (granted) "Root Access Granted (SU UID 0)" else "Root not granted (Running in Simulation Mode)"
+            if (granted) {
+                RootHelper.grantAllNecessaryPermissions(
+                    packageName = context.packageName,
+                    nativePeakHz = getPeakSupportedRefreshRate()
+                )
+                _isAccessibilityEnabledFlow.value = true
+                enforceActiveChargingRulesAsync()
+            }
+            _lastActionFeedbackFlow.value = if (granted) {
+                "Root Access & All AOSP Permissions Granted (SU UID 0)"
+            } else {
+                "Root not granted (Running in Safe Fallback Mode)"
+            }
         }
     }
 

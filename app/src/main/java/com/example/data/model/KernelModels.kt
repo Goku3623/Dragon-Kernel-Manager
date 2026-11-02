@@ -93,6 +93,14 @@ data class BatteryTelemetry(
     val isRootBatteryHealthGranted: Boolean = false
 )
 
+data class FreshStartTelemetryConfig(
+    val autoFreshStartOnUnplug: Boolean = true,
+    val autoFreshStartOnFullCharge: Boolean = true,
+    val autoFreshStartOnBoot: Boolean = false,
+    val telemetryBaselineMode: String = "CURRENT_UNPLUG", // "CURRENT_UNPLUG", "CUSTOM_FRESH", "CONTINUOUS"
+    val sessionStartTimeMs: Long = System.currentTimeMillis()
+)
+
 enum class BatteryProfile(
     val title: String,
     val description: String,
@@ -192,11 +200,41 @@ data class NightChargingConfig(
     val statusDetail: String = "Inactive (Standby for night schedule)"
 )
 
+enum class CurrentLimiterThermalMode(
+    val label: String,
+    val shortTitle: String,
+    val description: String
+) {
+    SMART_STEP_DOWN(
+        "Smart Current Step-Down",
+        "Step-Down",
+        "Steps down charging current to your configured safe fallback mA when battery reaches the temperature limit, and restores full current ceiling after cooldown."
+    ),
+    PAUSE_UNTIL_COOLED(
+        "Pause Charging Until Cooled",
+        "Pause Charge",
+        "Suspends battery charging via AOSP input_suspend & charging_enabled when temperature limit is reached, and resumes automatically after cooldown hysteresis."
+    ),
+    DYNAMIC_THERMAL_HOLD(
+        "Dynamic AOSP Thermal Hold",
+        "Dynamic Hold",
+        "Dynamically modulates PMIC FCC current & AOSP thermal zone trip points to hold battery temperature strictly at the custom ceiling without abrupt cutoffs."
+    )
+}
+
 data class ChargingControls(
     val speedMode: ChargingSpeedMode = ChargingSpeedMode.HYPERCHARGE_90W,
     val bypassCharging: Boolean = false, // Powers device directly, stops battery charge
     val manualCurrentLimiterEnabled: Boolean = false,
     val manualCurrentLimitMa: Int = 20000, // 1100mA (5W) - 20000mA (90W)
+    val customTempLimitEnabled: Boolean = true, // Custom temperature limit for Custom Current Limiter
+    val customTempLimitC: Float = 40.0f, // 32.0°C - 48.0°C configurable ceiling
+    val customTempThermalMode: CurrentLimiterThermalMode = CurrentLimiterThermalMode.SMART_STEP_DOWN,
+    val customTempFallbackCurrentMa: Int = 2200, // Fallback mA when temperature limit is reached (1100mA - 10000mA)
+    val customTempCooldownDeltaC: Float = 2.0f, // Cooldown hysteresis delta (1.0°C - 4.0°C) before restoring full current
+    val isCustomTempThrottlingActive: Boolean = false,
+    val effectiveEnforcedCurrentMa: Int = 20000,
+    val customTempStatusText: String = "Armed • Monitoring AOSP battery temp (Limit: 40.0°C • Resume: 38.0°C)",
     val bypassThermalLimit: Boolean = false, // Ignores thermal step-down to sustain 90W
     val nightCharging: NightChargingConfig = NightChargingConfig(),
     val romDefaultOverridden: Boolean = false,
@@ -206,7 +244,7 @@ data class ChargingControls(
     val activeOverrideStatus: String = "Standby • ROM Default Charging Active",
     val lastRootOverrideCommand: String = "/sys/class/power_supply/battery/constant_charge_current_max",
     val thermalBypassStatus: String = "Standby • ROM Default Thermal Throttling Active",
-    val lastThermalBypassCommand: String = "/sys/class/power_supply/battery/system_temp_level & cooling_device*/cur_state"
+    val lastThermalBypassCommand: String = "/sys/class/power_supply/battery/system_temp_level & cooling_deviceX/cur_state"
 )
 
 data class FpsOverlayConfig(

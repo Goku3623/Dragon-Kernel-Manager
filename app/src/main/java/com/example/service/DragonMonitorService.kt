@@ -6,6 +6,8 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
@@ -30,7 +32,58 @@ class DragonMonitorService : Service() {
     private val serviceScope = CoroutineScope(Dispatchers.Default + Job())
     private var monitorJob: Job? = null
     private var lastLogTime = 0L
-    private var lastNotificationSignature: String = ""
+    private var chargingWakeLock: PowerManager.WakeLock? = null
+
+    private fun updateNotificationImmediately() {
+        try {
+            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            notificationManager.notify(NOTIFICATION_ID, buildTelemetryNotification())
+        } catch (_: Exception) {}
+    }
+
+    private val batteryScreenReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val repository = KernelRepository.getInstance(applicationContext)
+            when (intent?.action) {
+                Intent.ACTION_POWER_DISCONNECTED -> {
+                    repository.notifyPowerDisconnected()
+                    updateNotificationImmediately()
+                }
+                Intent.ACTION_POWER_CONNECTED -> {
+                    repository.notifyPowerConnected()
+                    updateNotificationImmediately()
+                }
+                Intent.ACTION_SCREEN_ON,
+                Intent.ACTION_SCREEN_OFF,
+                Intent.ACTION_BATTERY_CHANGED -> {
+                    repository.tickTelemetry()
+                    updateNotificationImmediately()
+                }
+            }
+        }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        try {
+            val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
+            chargingWakeLock = pm?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "DragonKernel:ChargingWakeLock")
+        } catch (_: Exception) {}
+        try {
+            val filter = android.content.IntentFilter().apply {
+                addAction(Intent.ACTION_SCREEN_ON)
+                addAction(Intent.ACTION_SCREEN_OFF)
+                addAction(Intent.ACTION_POWER_CONNECTED)
+                addAction(Intent.ACTION_POWER_DISCONNECTED)
+                addAction(Intent.ACTION_BATTERY_CHANGED)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(batteryScreenReceiver, filter, Context.RECEIVER_EXPORTED)
+            } else {
+                registerReceiver(batteryScreenReceiver, filter)
+            }
+        } catch (_: Exception) {}
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -57,7 +110,20 @@ class DragonMonitorService : Service() {
             }
         }
 
-        startForeground(NOTIFICATION_ID, buildTelemetryNotification())
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val serviceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                } else 0
+                startForeground(NOTIFICATION_ID, buildTelemetryNotification(), serviceType)
+            } else {
+                startForeground(NOTIFICATION_ID, buildTelemetryNotification())
+            }
+        } catch (_: Exception) {
+            startForeground(NOTIFICATION_ID, buildTelemetryNotification())
+        }
+
+        updateNotificationImmediately()
         startTelemetryLoop()
 
         return START_STICKY
@@ -69,26 +135,32 @@ class DragonMonitorService : Service() {
             val repository = KernelRepository.getInstance(applicationContext)
             val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
             val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            var loopCount = 0L
 
             while (isActive) {
+                loopCount++
                 repository.tickTelemetry()
 
                 val battery = repository.batteryFlow.value
                 val profile = repository.activeProfileFlow.value
                 val thermal = repository.thermalConfigFlow.value
+                val charging = repository.chargingControlsFlow.value
 
-                // Only post notification updates when screen is on and content actually changed to avoid SystemUI lag
-                val isInteractive = powerManager?.isInteractive ?: true
-                if (isInteractive) {
-                    val customProfile = repository.activeCustomProfileFlow.value
-                    val modeTag = customProfile?.title ?: profile.title
-                    val isRec = repository.isRecordingFpsFlow.value
-                    val sig = "${battery.levelPercent}_${abs(battery.currentMa)}_${battery.temperatureC.toInt()}_${battery.screenOnTimeFormatted}_${battery.screenOffTimeFormatted}_${modeTag}_rec$isRec"
-                    if (sig != lastNotificationSignature) {
-                        lastNotificationSignature = sig
-                        notificationManager.notify(NOTIFICATION_ID, buildTelemetryNotification())
+                // Acquire or release charging wakelock so CPU does not suspend continuous charging sync
+                if (battery.isCharging) {
+                    if (chargingWakeLock?.isHeld != true) {
+                        try { chargingWakeLock?.acquire(3600_000L) } catch (_: Exception) {}
+                    }
+                } else {
+                    if (chargingWakeLock?.isHeld == true) {
+                        try { chargingWakeLock?.release() } catch (_: Exception) {}
                     }
                 }
+
+                // Live continuous sync: ALWAYS update notification every 1 second (1Hz) live with latest battery stats
+                try {
+                    notificationManager.notify(NOTIFICATION_ID, buildTelemetryNotification())
+                } catch (_: Exception) {}
 
                 // Check thermal threshold
                 if (thermal.enabled && (battery.temperatureC >= thermal.criticalThresholdC || repository.cpuTempFlow.value >= 75.0f)) {
@@ -118,7 +190,7 @@ class DragonMonitorService : Service() {
                     db.telemetryLogDao().pruneOldLogs()
                 }
 
-                delay(3500L)
+                delay(1000L)
             }
         }
     }
@@ -141,56 +213,129 @@ class DragonMonitorService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // Clean, borderless, simple 6-line real-time telemetry matching the screenshot
+        // Clean, borderless, simple 6-line real-time telemetry matching the user's design
         val absMa = abs(battery.currentMa)
         val wattsVal = battery.livePowerWatts
-        val line1Power = String.format(
-            Locale.US,
-            "%d%% • %d mA (%.1f W) • %.0f°C",
-            battery.levelPercent,
-            absMa,
-            wattsVal,
-            battery.temperatureC
-        )
-        val line2Drain = String.format(
-            Locale.US,
-            "Active: %.1f%%/h • Idle: %.1f%%/h",
-            battery.activeDrainPerHour,
-            battery.idleDrainPerHour
-        )
-        val line3ScreenOn = String.format(
-            Locale.US,
-            "Screen On: %s • %.1f%% (%d mAh)",
-            battery.screenOnTimeFormatted,
-            battery.screenOnDrainPercent,
-            battery.screenOnDrainMah
-        )
-        val line4ScreenOff = String.format(
-            Locale.US,
-            "Screen Off: %s • %.1f%% (%d mAh)",
-            battery.screenOffTimeFormatted,
-            battery.screenOffDrainPercent,
-            battery.screenOffDrainMah
-        )
-        val line5DeepSleep = String.format(
-            Locale.US,
-            "Deep sleep: %s • %.1f%%",
-            battery.deepSleepTimeFormatted,
-            battery.deepSleepPercent
-        )
-        val line6Awake = String.format(
-            Locale.US,
-            "Awake: %s • %.1f%%",
-            battery.awakeTimeFormatted,
-            battery.awakePercent
-        )
+        val charging = repository.chargingControlsFlow.value
+        val isThermalBypassActive = charging.bypassThermalLimit
+
+        val line1Power: String
+        val line2Drain: String
+        val line3Detail: String
+        val line4Detail: String
+        val line5Detail: String
+        val line6Detail: String
+
+        if (battery.isCharging) {
+            // Live continuous charging telemetry: +mA, +W, rate (+%/h), time to full, and thermal bypass status
+            val chargeRatePerHour = if (battery.learnedFullCapacityMah > 0) {
+                (absMa.toFloat() / battery.learnedFullCapacityMah.toFloat()) * 100f
+            } else (absMa.toFloat() / 5000f) * 100f
+
+            val speedLabel = when {
+                battery.isBypassCharging -> "Bypass Mode (Direct Power)"
+                wattsVal >= 65f -> "HyperCharge 90W"
+                wattsVal >= 40f -> "SuperCharge 67W"
+                wattsVal >= 25f -> "Turbo Charge 33W"
+                wattsVal >= 15f -> "Fast Charge 18W"
+                else -> "USB Charging"
+            }
+
+            val remainingMahToFull = kotlin.math.max(0, battery.learnedFullCapacityMah - battery.remainingCapacityMah)
+            val estTimeToFullMin = if (absMa > 150) {
+                ((remainingMahToFull.toFloat() / absMa.toFloat()) * 60f).toInt().coerceIn(1, 360)
+            } else 35
+
+            line1Power = String.format(
+                Locale.US,
+                "%d%% • ⚡ +%d mA (%.1f W) • %.0f°C",
+                battery.levelPercent,
+                absMa,
+                wattsVal,
+                battery.temperatureC
+            )
+            line2Drain = String.format(
+                Locale.US,
+                "Charging: +%.1f%%/h • %s",
+                chargeRatePerHour,
+                speedLabel
+            )
+            line3Detail = String.format(
+                Locale.US,
+                "Time to Full: ~%d min • %d/%d mAh",
+                estTimeToFullMin,
+                battery.remainingCapacityMah,
+                battery.learnedFullCapacityMah
+            )
+            line4Detail = String.format(
+                Locale.US,
+                "Thermal Limit: %s • Voltage: %.2f V",
+                if (isThermalBypassActive) "Bypassed (Unthrottled)" else "ROM Standard",
+                battery.voltageMv / 1000f
+            )
+            line5Detail = String.format(
+                Locale.US,
+                "Deep sleep: %s • Awake: %s",
+                battery.deepSleepTimeFormatted,
+                battery.awakeTimeFormatted
+            )
+            line6Detail = String.format(
+                Locale.US,
+                "Health: %d%% SOH • %d Cycles • %s",
+                battery.healthPercent,
+                battery.chargeCycles,
+                modeTag
+            )
+        } else {
+            // Discharging telemetry matching the original clean 6-line readout
+            line1Power = String.format(
+                Locale.US,
+                "%d%% • %d mA (%.1f W) • %.0f°C",
+                battery.levelPercent,
+                absMa,
+                wattsVal,
+                battery.temperatureC
+            )
+            line2Drain = String.format(
+                Locale.US,
+                "Active: %.1f%%/h • Idle: %.1f%%/h",
+                battery.activeDrainPerHour,
+                battery.idleDrainPerHour
+            )
+            line3Detail = String.format(
+                Locale.US,
+                "Screen On: %s • %.1f%% (%d mAh)",
+                battery.screenOnTimeFormatted,
+                battery.screenOnDrainPercent,
+                battery.screenOnDrainMah
+            )
+            line4Detail = String.format(
+                Locale.US,
+                "Screen Off: %s • %.1f%% (%d mAh)",
+                battery.screenOffTimeFormatted,
+                battery.screenOffDrainPercent,
+                battery.screenOffDrainMah
+            )
+            line5Detail = String.format(
+                Locale.US,
+                "Deep sleep: %s • %.1f%%",
+                battery.deepSleepTimeFormatted,
+                battery.deepSleepPercent
+            )
+            line6Detail = String.format(
+                Locale.US,
+                "Awake: %s • %.1f%%",
+                battery.awakeTimeFormatted,
+                battery.awakePercent
+            )
+        }
 
         val expandedBody = buildString {
             appendLine(line2Drain)
-            appendLine(line3ScreenOn)
-            appendLine(line4ScreenOff)
-            appendLine(line5DeepSleep)
-            append(line6Awake)
+            appendLine(line3Detail)
+            appendLine(line4Detail)
+            appendLine(line5Detail)
+            append(line6Detail)
         }
 
         val isRecording = repository.isRecordingFpsFlow.value
@@ -207,7 +352,7 @@ class DragonMonitorService : Service() {
         return NotificationCompat.Builder(this, DragonKernelApp.CHANNEL_TELEMETRY)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle(line1Power)
-            .setContentText("$line2Drain • $line3ScreenOn")
+            .setContentText("$line2Drain • $line3Detail")
             .setSubText(modeTag)
             .setStyle(
                 NotificationCompat.BigTextStyle()
@@ -269,6 +414,12 @@ class DragonMonitorService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         monitorJob?.cancel()
+        if (chargingWakeLock?.isHeld == true) {
+            try { chargingWakeLock?.release() } catch (_: Exception) {}
+        }
+        try {
+            unregisterReceiver(batteryScreenReceiver)
+        } catch (_: Exception) {}
     }
 
     companion object {

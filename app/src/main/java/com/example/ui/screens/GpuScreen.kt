@@ -1,8 +1,13 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -295,7 +300,7 @@ fun GpuScreen(repository: KernelRepository) {
             Spacer(modifier = Modifier.height(16.dp))
         }
 
-        item {
+        item(key = "gpu_boost_card") {
             // GPU Boost (AdrenoBoost) Card
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -329,41 +334,47 @@ fun GpuScreen(repository: KernelRepository) {
                         )
                     }
 
-                    if (gpuConfig.gpuBoostEnabled) {
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text(
-                            text = "GPU Boost Intensity Profile (`/sys/class/kgsl/kgsl-3d0/devfreq/adrenoboost`):",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
+                    AnimatedVisibility(
+                        visible = gpuConfig.gpuBoostEnabled,
+                        enter = expandVertically(tween(220)) + fadeIn(tween(180)),
+                        exit = shrinkVertically(tween(180)) + fadeOut(tween(150))
+                    ) {
+                        Column {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = "GPU Boost Intensity Profile:",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            listOf("LOW", "MEDIUM", "DYNAMIC", "AGGRESSIVE").forEach { level ->
-                                val isSelected = gpuConfig.gpuBoostLevel == level
-                                Button(
-                                    onClick = { repository.updateGpuBoost(true, level) },
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .defaultMinSize(minHeight = 36.dp),
-                                    contentPadding = PaddingValues(2.dp),
-                                    shape = RoundedCornerShape(8.dp),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = if (isSelected) {
-                                            if (level == "AGGRESSIVE") DangerRed else MaterialTheme.colorScheme.primary
-                                        } else MaterialTheme.colorScheme.surfaceVariant
-                                    )
-                                ) {
-                                    Text(
-                                        text = level,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (isSelected) Color.Black else MaterialTheme.colorScheme.onSurface
-                                    )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                listOf("LOW", "MEDIUM", "DYNAMIC", "AGGRESSIVE").forEach { level ->
+                                    val isSelected = gpuConfig.gpuBoostLevel == level
+                                    Button(
+                                        onClick = { repository.updateGpuBoost(true, level) },
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .defaultMinSize(minHeight = 36.dp),
+                                        contentPadding = PaddingValues(2.dp),
+                                        shape = RoundedCornerShape(8.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = if (isSelected) {
+                                                if (level == "AGGRESSIVE") DangerRed else MaterialTheme.colorScheme.primary
+                                            } else MaterialTheme.colorScheme.surfaceVariant
+                                        )
+                                    ) {
+                                        Text(
+                                            text = level,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (isSelected) Color.Black else MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -373,7 +384,7 @@ fun GpuScreen(repository: KernelRepository) {
             Spacer(modifier = Modifier.height(16.dp))
         }
 
-        item {
+        item(key = "gpu_power_level_card") {
             // GPU Hardware Power Level Card (default_pwrlevel)
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -477,7 +488,7 @@ fun GpuScreen(repository: KernelRepository) {
             Spacer(modifier = Modifier.height(16.dp))
         }
 
-        item {
+        item(key = "gpu_voltage_sliders_card") {
             // Custom Voltage Control Sliders (Undervolting)
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -509,6 +520,8 @@ fun GpuScreen(repository: KernelRepository) {
 
                     gpuConfig.availableFrequenciesMhz.reversed().forEach { freq ->
                         val currentOffset = gpuConfig.customVoltageOffsets[freq] ?: -25
+                        var offsetSlider by remember(freq, currentOffset) { mutableFloatStateOf(currentOffset.toFloat()) }
+                        val displayedOffset = offsetSlider.toInt()
                         Column(modifier = Modifier.padding(vertical = 6.dp)) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -531,11 +544,11 @@ fun GpuScreen(repository: KernelRepository) {
                                     }
                                 }
                                 Badge(
-                                    containerColor = if (currentOffset < 0) SuccessGreen.copy(alpha = 0.2f) else WarningOrange.copy(alpha = 0.2f),
-                                    contentColor = if (currentOffset < 0) SuccessGreen else WarningOrange
+                                    containerColor = if (displayedOffset < 0) SuccessGreen.copy(alpha = 0.2f) else WarningOrange.copy(alpha = 0.2f),
+                                    contentColor = if (displayedOffset < 0) SuccessGreen else WarningOrange
                                 ) {
                                     Text(
-                                        text = "$currentOffset mV",
+                                        text = "$displayedOffset mV",
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 11.sp,
                                         fontFamily = FontFamily.Monospace
@@ -544,9 +557,12 @@ fun GpuScreen(repository: KernelRepository) {
                             }
 
                             Slider(
-                                value = currentOffset.toFloat(),
+                                value = offsetSlider,
                                 onValueChange = { newVal ->
-                                    repository.updateGpuVoltageOffset(freq, newVal.toInt())
+                                    offsetSlider = newVal
+                                },
+                                onValueChangeFinished = {
+                                    repository.updateGpuVoltageOffset(freq, offsetSlider.toInt())
                                 },
                                 valueRange = -100f..30f,
                                 steps = 25
