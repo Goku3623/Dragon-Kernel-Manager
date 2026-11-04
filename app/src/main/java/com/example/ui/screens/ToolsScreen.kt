@@ -62,8 +62,8 @@ fun ToolsScreen(repository: KernelRepository) {
     val clipboardManager = LocalClipboardManager.current
 
     var selectedToolSection by remember { mutableStateOf(0) }
-    // 0: FPS, 1: App Freezer, 2: VRAM, 3: DexOpt, 4: Scripts, 5: Logs & Sync, 6: Theme & Color
-    val toolTabs = listOf("FPS", "App Freezer", "VRAM", "DexOpt", "Scripts", "Logs & Sync", "Theme & Color")
+    // 0: FPS, 1: App Freezer, 2: Ad Blocker, 3: VRAM, 4: DexOpt, 5: Scripts, 6: Logs & Sync, 7: Theme & Color
+    val toolTabs = listOf("FPS", "App Freezer", "Ad Blocker", "VRAM", "DexOpt", "Scripts", "Logs & Sync", "Theme & Color")
 
     val currentFps by repository.currentFpsFlow.collectAsState()
     val fpsHistory by repository.fpsHistoryFlow.collectAsState()
@@ -96,7 +96,7 @@ fun ToolsScreen(repository: KernelRepository) {
             ) {
                 Column {
                     Text(
-                        text = "KERNEL TOOLBOX & SYSTEM TWEAKS",
+                        text = "MORE TOOLS & SYSTEM TWEAKS",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 1.sp,
@@ -284,6 +284,13 @@ fun ToolsScreen(repository: KernelRepository) {
             }
 
             2 -> {
+                // AD BLOCKER & SOCIAL MEDIA ANTI-TRACKING
+                item {
+                    AdBlockerSection(repository = repository)
+                }
+            }
+
+            3 -> {
                 // VRAM & MEMORY TUNING
                 item {
                     VramTuningSection(
@@ -293,7 +300,7 @@ fun ToolsScreen(repository: KernelRepository) {
                 }
             }
 
-            3 -> {
+            4 -> {
                 // DEXOPT ART COMPILATION CARD
                 item {
                     Card(
@@ -365,7 +372,7 @@ fun ToolsScreen(repository: KernelRepository) {
                 }
             }
 
-            4 -> {
+            5 -> {
                 // SCRIPT MANAGER (PRESETS & USER SCRIPTS)
                 item {
                     var showNewScriptDialog by remember { mutableStateOf(false) }
@@ -444,10 +451,11 @@ fun ToolsScreen(repository: KernelRepository) {
                 }
             }
 
-            5 -> {
+            6 -> {
                 // LOG HISTORY, POWER HEALTH TRACKING & CLOUD SYNC
+
                 item {
-                    // Thermal Warning Notification System Config
+                    // Thermal Alert Notification Card (Default OFF)
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(18.dp),
@@ -457,48 +465,119 @@ fun ToolsScreen(repository: KernelRepository) {
                         Column(modifier = Modifier.padding(16.dp)) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Whatshot, contentDescription = "Thermal Warning", tint = DangerRed)
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.NotificationsActive,
+                                        contentDescription = "Thermal Alert Notification",
+                                        tint = if (thermalConfig.enabled) WarningOrange else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(20.dp)
+                                    )
                                     Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Critical Thermal Warning System", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                    Column {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = "Thermal Alert Notification",
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 15.sp
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Badge(
+                                                containerColor = if (thermalConfig.enabled) {
+                                                    WarningOrange.copy(alpha = 0.2f)
+                                                } else {
+                                                    MaterialTheme.colorScheme.surfaceVariant
+                                                }
+                                            ) {
+                                                Text(
+                                                    text = if (thermalConfig.enabled) "ON" else "OFF",
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 10.sp,
+                                                    color = if (thermalConfig.enabled) WarningOrange else MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
+                                        Text(
+                                            text = if (thermalConfig.enabled) {
+                                                "Active • Sends high-priority alert at ≥ ${String.format(Locale.US, "%.1f°C", thermalConfig.criticalThresholdC)} battery or 75°C CPU"
+                                            } else {
+                                                "Off by default • Enable to receive high-temperature alert notifications"
+                                            },
+                                            fontSize = 11.sp,
+                                            color = if (thermalConfig.enabled) WarningOrange else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
                                 }
+
                                 Switch(
                                     checked = thermalConfig.enabled,
-                                    onCheckedChange = { repository.updateThermalConfig(it, thermalConfig.criticalThresholdC) }
+                                    onCheckedChange = { enabled ->
+                                        repository.updateThermalConfig(enabled, thermalConfig.criticalThresholdC)
+                                    }
                                 )
                             }
 
-                            Text(
-                                text = "Fires high-priority heads-up warning notification with alert sounds when hardware temperatures breach safety limit.",
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(vertical = 4.dp)
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Alert Temperature Threshold",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = String.format(Locale.US, "%.1f°C", thermalConfig.criticalThresholdC),
+                                    fontSize = 13.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = if (thermalConfig.enabled) WarningOrange else MaterialTheme.colorScheme.primary
+                                )
+                            }
+
+                            Slider(
+                                value = thermalConfig.criticalThresholdC,
+                                onValueChange = { newThreshold ->
+                                    repository.updateThermalConfig(thermalConfig.enabled, newThreshold)
+                                },
+                                valueRange = 40.0f..52.0f,
+                                steps = 23,
+                                colors = SliderDefaults.colors(
+                                    thumbColor = if (thermalConfig.enabled) WarningOrange else MaterialTheme.colorScheme.primary,
+                                    activeTrackColor = if (thermalConfig.enabled) WarningOrange else MaterialTheme.colorScheme.primary
+                                )
                             )
 
-                            if (thermalConfig.enabled) {
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Text("Alert Threshold:", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
-                                    Text(
-                                        "${thermalConfig.criticalThresholdC.toInt()}°C",
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        fontFamily = FontFamily.Monospace,
-                                        color = DangerRed
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                listOf(42.0f, 44.0f, 46.0f, 48.0f, 50.0f).forEach { presetTemp ->
+                                    val isSelected = kotlin.math.abs(thermalConfig.criticalThresholdC - presetTemp) < 0.25f
+                                    FilterChip(
+                                        selected = isSelected,
+                                        onClick = {
+                                            repository.updateThermalConfig(thermalConfig.enabled, presetTemp)
+                                        },
+                                        label = {
+                                            Text(
+                                                text = "${presetTemp.toInt()}°C",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        },
+                                        modifier = Modifier.weight(1f)
                                     )
                                 }
-                                Slider(
-                                    value = thermalConfig.criticalThresholdC,
-                                    onValueChange = { repository.updateThermalConfig(true, it) },
-                                    valueRange = 40f..55f,
-                                    steps = 14
-                                )
                             }
                         }
                     }
@@ -714,7 +793,7 @@ fun ToolsScreen(repository: KernelRepository) {
                 }
             }
 
-            6 -> {
+            7 -> {
                 // INTERFACE THEME & ACCENT COLOR STUDIO (SEPARATE SECTION AFTER LOGS & SYNC)
                 item {
                     ThemeStudioSection(

@@ -1,0 +1,1913 @@
+package com.example.ui.screens
+
+import android.Manifest
+import android.annotation.SuppressLint
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
+import android.webkit.CookieManager
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.core.content.ContextCompat
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import coil.compose.AsyncImage
+import com.example.data.downloader.WebViewMediaExtractor
+import com.example.data.model.*
+import com.example.data.repository.KernelRepository
+import com.example.ui.theme.DangerRed
+import com.example.ui.theme.NeonCyan
+import com.example.ui.theme.SuccessGreen
+import com.example.ui.theme.WarningOrange
+import java.util.Locale
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun DownloaderScreen(
+    repository: KernelRepository
+) {
+    val context = LocalContext.current
+    val downloadManager = remember { repository.downloadManager }
+    val tasks by downloadManager.tasksFlow.collectAsState()
+    val customBackendUrl by downloadManager.backendUrlFlow.collectAsState()
+
+    var urlInput by remember { mutableStateOf("") }
+    var isFetching by remember { mutableStateOf(false) }
+    var fetchStage by remember { mutableStateOf(DownloadStateStage.VALIDATING_URL) }
+    var mediaInfo by remember { mutableStateOf<MediaInfo?>(null) }
+    var fetchErrorType by remember { mutableStateOf<DownloaderErrorType?>(null) }
+    var fetchErrorMessage by remember { mutableStateOf<String?>(null) }
+
+    var isAudioOnlyMode by remember { mutableStateOf(false) }
+    var selectedFormatIndex by remember { mutableStateOf(0) }
+    var qualityDropdownExpanded by remember { mutableStateOf(false) }
+    var managerFilter by remember { mutableStateOf("ALL") } // ALL, DOWNLOADING, PROCESSING, COMPLETED, PAUSED, FAILED
+    var showBackendConfigDialog by remember { mutableStateOf(false) }
+    var showPrivateAuthDialog by remember { mutableStateOf(false) }
+    var activeWebViewLoginPlatform by remember { mutableStateOf<Pair<String, String>?>(null) }
+
+    val webViewExtractor = remember { downloadManager.webViewExtractor }
+    val restrictedBypassEnabled by webViewExtractor.restrictedBypassEnabled.collectAsState()
+    val sessionUpdateCounter by webViewExtractor.sessionUpdateCounter.collectAsState()
+
+    val detectedPlatform = remember(urlInput) { MediaPlatform.detectFromUrl(urlInput) }
+    val clipboardManager = remember { context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager }
+
+    val requiredPermissions = remember {
+        buildList {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                add(Manifest.permission.READ_MEDIA_VIDEO)
+                add(Manifest.permission.READ_MEDIA_AUDIO)
+                add(Manifest.permission.POST_NOTIFICATIONS)
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                add(Manifest.permission.READ_EXTERNAL_STORAGE)
+                if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
+                    add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                }
+            } else {
+                add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                add(Manifest.permission.READ_EXTERNAL_STORAGE)
+            }
+        }.toTypedArray()
+    }
+
+    var hasStoragePermissions by remember {
+        mutableStateOf(
+            requiredPermissions.all { perm ->
+                ContextCompat.checkSelfPermission(context, perm) == PackageManager.PERMISSION_GRANTED
+            }
+        )
+    }
+
+    var pendingDownloadAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { grantMap ->
+        hasStoragePermissions = grantMap.values.all { it } || requiredPermissions.all { perm ->
+            ContextCompat.checkSelfPermission(context, perm) == PackageManager.PERMISSION_GRANTED
+        }
+        pendingDownloadAction?.invoke()
+        pendingDownloadAction = null
+    }
+
+    LaunchedEffect(Unit) {
+        if (!hasStoragePermissions && requiredPermissions.isNotEmpty()) {
+            permissionLauncher.launch(requiredPermissions)
+        }
+    }
+
+    val triggerFetch: (String) -> Unit = { targetUrl ->
+        if (targetUrl.isBlank()) {
+            fetchErrorType = DownloaderErrorType.INVALID_URL
+            fetchErrorMessage = "Please enter or paste a valid media link."
+        } else {
+            isFetching = true
+            fetchErrorType = null
+            fetchErrorMessage = null
+            downloadManager.fetchMediaInfo(
+                url = targetUrl,
+                onStageChanged = { stage -> fetchStage = stage },
+                onResult = { info, errType, errMsg ->
+                    isFetching = false
+                    if (info != null) {
+                        mediaInfo = info
+                        isAudioOnlyMode = info.videoFormats.isEmpty() && info.audioFormats.isNotEmpty()
+                        selectedFormatIndex = 0
+                    } else {
+                        mediaInfo = null
+                        fetchErrorType = errType ?: DownloaderErrorType.UNSUPPORTED_MEDIA
+                        fetchErrorMessage = errMsg ?: "Unable to fetch media metadata."
+                    }
+                }
+            )
+        }
+    }
+
+    if (showBackendConfigDialog) {
+        BackendConfigDialog(
+            currentUrl = customBackendUrl,
+            onDismiss = { showBackendConfigDialog = false },
+            onSave = { newUrl ->
+                downloadManager.setCustomBackendUrl(newUrl)
+                showBackendConfigDialog = false
+            }
+        )
+    }
+
+    if (showPrivateAuthDialog) {
+        PrivateAccessSessionDialog(
+            webViewExtractor = webViewExtractor,
+            restrictedBypassEnabled = restrictedBypassEnabled,
+            sessionCounter = sessionUpdateCounter,
+            onDismiss = { showPrivateAuthDialog = false },
+            onOpenWebViewLogin = { platformTitle, loginUrl ->
+                showPrivateAuthDialog = false
+                activeWebViewLoginPlatform = platformTitle to loginUrl
+            }
+        )
+    }
+
+    activeWebViewLoginPlatform?.let { (platformTitle, loginUrl) ->
+        PlatformWebViewLoginDialog(
+            platformTitle = platformTitle,
+            loginUrl = loginUrl,
+            onDismiss = {
+                webViewExtractor.notifyWebViewLoginCompleted()
+                activeWebViewLoginPlatform = null
+            }
+        )
+    }
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .testTag("downloader_screen"),
+        contentPadding = PaddingValues(start = 16.dp, top = 14.dp, end = 16.dp, bottom = 104.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        // 1. Hero Header Card
+        item(key = "downloader_hero_header") {
+            Card(
+                shape = RoundedCornerShape(22.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.32f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            Brush.horizontalGradient(
+                                listOf(
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
+                                    NeonCyan.copy(alpha = 0.08f),
+                                    Color.Transparent
+                                )
+                            )
+                        )
+                        .padding(16.dp)
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(44.dp)
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f))
+                                        .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f), RoundedCornerShape(14.dp)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.CloudDownload,
+                                        contentDescription = "Downloader",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
+                                Column {
+                                    Text(
+                                        text = "UNIVERSAL AUDIO & VIDEO DOWNLOADER",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Black,
+                                        letterSpacing = 0.8.sp,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "Video: Download > Dragon Tools > Video • Audio: Download > Dragon Tools > Audio",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(
+                                    onClick = { showPrivateAuthDialog = true },
+                                    modifier = Modifier.testTag("private_auth_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.VpnKey,
+                                        contentDescription = "Private & Restricted Content Access",
+                                        tint = if (restrictedBypassEnabled) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { showBackendConfigDialog = true },
+                                    modifier = Modifier.testTag("backend_config_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Dns,
+                                        contentDescription = "Backend Engine Settings",
+                                        tint = if (customBackendUrl.isNotBlank()) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+
+                        // Private / Restricted Unlock Status Bar
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = SuccessGreen.copy(alpha = 0.12f),
+                            border = BorderStroke(1.dp, SuccessGreen.copy(alpha = 0.4f)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { showPrivateAuthDialog = true }
+                                .testTag("restricted_access_banner")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.LockOpen,
+                                        contentDescription = null,
+                                        tint = SuccessGreen,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Text(
+                                        text = if (restrictedBypassEnabled)
+                                            "Private & Restricted Content Resolver: ACTIVE (Embed + Session Cookies)"
+                                        else
+                                            "Private & Restricted Resolver: Tap to configure login or cookies",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                                Text(
+                                    text = "Configure",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = NeonCyan
+                                )
+                            }
+                        }
+
+                        // Save Location & Storage Permission Status Bar
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    if (!hasStoragePermissions && requiredPermissions.isNotEmpty()) {
+                                        permissionLauncher.launch(requiredPermissions)
+                                    }
+                                }
+                                .testTag("storage_permission_banner")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.FolderSpecial,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Text(
+                                        text = "Save Path: Internal Storage > Download > Dragon Tools > Video | Audio",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                                Text(
+                                    text = if (hasStoragePermissions) "Permitted" else "Grant Access",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (hasStoragePermissions) SuccessGreen else WarningOrange
+                                )
+                            }
+                        }
+
+                        // Supported Platform Pills Row
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf(
+                                MediaPlatform.YOUTUBE,
+                                MediaPlatform.YOUTUBE_SHORTS,
+                                MediaPlatform.TIKTOK,
+                                MediaPlatform.INSTAGRAM,
+                                MediaPlatform.FACEBOOK,
+                                MediaPlatform.TWITTER,
+                                MediaPlatform.SNAPCHAT,
+                                MediaPlatform.REDDIT,
+                                MediaPlatform.PINTEREST,
+                                MediaPlatform.VIMEO,
+                                MediaPlatform.DIRECT
+                            ).forEach { plat ->
+                                val isDetected = urlInput.isNotBlank() && detectedPlatform == plat
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (isDetected) Color(plat.badgeColor).copy(alpha = 0.24f)
+                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                                    border = BorderStroke(
+                                        width = 1.dp,
+                                        color = if (isDetected) Color(plat.badgeColor)
+                                        else MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+                                    )
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = platformIcon(plat),
+                                            contentDescription = null,
+                                            tint = if (isDetected) Color(plat.badgeColor) else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(12.dp)
+                                        )
+                                        Text(
+                                            text = plat.displayName,
+                                            fontSize = 10.sp,
+                                            fontWeight = if (isDetected) FontWeight.ExtraBold else FontWeight.Medium,
+                                            color = if (isDetected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. URL Input & Extraction Card
+        item(key = "url_input_card") {
+            Card(
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.24f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "SOURCE MEDIA LINK",
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.8.sp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+
+                        if (urlInput.isNotBlank()) {
+                            val badgeColor = Color(detectedPlatform.badgeColor)
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = badgeColor.copy(alpha = 0.18f),
+                                border = BorderStroke(1.dp, badgeColor.copy(alpha = 0.65f))
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = platformIcon(detectedPlatform),
+                                        contentDescription = null,
+                                        tint = badgeColor,
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                    Text(
+                                        text = "Detected: ${detectedPlatform.displayName}",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = urlInput,
+                        onValueChange = {
+                            urlInput = it
+                            fetchErrorType = null
+                            fetchErrorMessage = null
+                        },
+                        placeholder = {
+                            Text(
+                                text = "Paste YouTube, TikTok, Instagram, X, Reddit, or Direct MP4/MP3 link...",
+                                fontSize = 12.sp
+                            )
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("url_input_field"),
+                        shape = RoundedCornerShape(14.dp),
+                        singleLine = true,
+                        leadingIcon = {
+                            Icon(
+                                imageVector = platformIcon(detectedPlatform),
+                                contentDescription = null,
+                                tint = if (urlInput.isNotBlank()) Color(detectedPlatform.badgeColor)
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        },
+                        trailingIcon = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (urlInput.isNotEmpty()) {
+                                    IconButton(
+                                        onClick = {
+                                            urlInput = ""
+                                            mediaInfo = null
+                                            fetchErrorType = null
+                                            fetchErrorMessage = null
+                                        },
+                                        modifier = Modifier.testTag("clear_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Clear,
+                                            contentDescription = "Clear URL",
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                                IconButton(
+                                    onClick = {
+                                        val clip = clipboardManager.primaryClip
+                                        if (clip != null && clip.itemCount > 0) {
+                                            val pasted = clip.getItemAt(0).coerceToText(context)?.toString()?.trim() ?: ""
+                                            if (pasted.isNotEmpty()) {
+                                                urlInput = pasted
+                                                fetchErrorType = null
+                                                fetchErrorMessage = null
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier.testTag("paste_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.ContentPaste,
+                                        contentDescription = "Paste Link",
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
+                        }
+                    )
+
+                    // Error Banner with Retry button
+                    AnimatedVisibility(visible = fetchErrorMessage != null) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = DangerRed.copy(alpha = 0.14f),
+                            border = BorderStroke(1.dp, DangerRed.copy(alpha = 0.5f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ErrorOutline,
+                                    contentDescription = null,
+                                    tint = DangerRed,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = fetchErrorType?.title ?: "Extraction Error",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = DangerRed
+                                    )
+                                    Text(
+                                        text = fetchErrorMessage ?: "",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                                TextButton(
+                                    onClick = { triggerFetch(urlInput) },
+                                    modifier = Modifier.testTag("retry_fetch_button")
+                                ) {
+                                    Text("Retry", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                                }
+                            }
+                        }
+                    }
+
+                    // Fetch Media Button
+                    Button(
+                        onClick = { triggerFetch(urlInput) },
+                        enabled = !isFetching,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp)
+                            .testTag("fetch_media_button"),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                    ) {
+                        if (isFetching) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                color = Color.White,
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                text = "${fetchStage.displayLabel}...",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.TravelExplore,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Fetch Media",
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 14.sp
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Extracted Media Preview & Format Selector Card
+        item(key = "media_preview_section") {
+            AnimatedVisibility(
+                visible = mediaInfo != null,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically()
+            ) {
+                mediaInfo?.let { info ->
+                    var selectedCategoryFilter by remember(info.originalUrl, isAudioOnlyMode) {
+                        mutableStateOf("All")
+                    }
+                    val allModeFormats = if (isAudioOnlyMode) info.audioFormats else info.videoFormats
+                    val categories = remember(allModeFormats, isAudioOnlyMode) {
+                        val cats = allModeFormats.mapNotNull { it.formatCategory.takeIf { c -> c.isNotBlank() } }.distinct()
+                        listOf("All") + cats
+                    }
+                    val activeFormats = remember(allModeFormats, selectedCategoryFilter) {
+                        if (selectedCategoryFilter == "All") {
+                            allModeFormats
+                        } else {
+                            allModeFormats.filter { it.formatCategory.equals(selectedCategoryFilter, ignoreCase = true) }
+                                .ifEmpty { allModeFormats }
+                        }
+                    }
+                    val safeIndex = selectedFormatIndex.coerceIn(0, (activeFormats.size - 1).coerceAtLeast(0))
+                    val selectedFormat = activeFormats.getOrNull(safeIndex)
+
+                    Card(
+                        shape = RoundedCornerShape(20.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        border = BorderStroke(1.2.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("media_preview_card")
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(14.dp)
+                        ) {
+                            // Top status row
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .clip(CircleShape)
+                                            .background(SuccessGreen)
+                                    )
+                                    Text(
+                                        text = info.extractorSource.uppercase(Locale.US),
+                                        fontSize = 10.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.Bold,
+                                        color = SuccessGreen
+                                    )
+                                }
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = Color(info.platform.badgeColor).copy(alpha = 0.2f)
+                                ) {
+                                    Text(
+                                        text = info.platform.displayName,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(info.platform.badgeColor),
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+
+                            // Thumbnail + Metadata Row
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(116.dp, 82.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (info.thumbnailUrl.isNotBlank()) {
+                                        AsyncImage(
+                                            model = info.thumbnailUrl,
+                                            contentDescription = info.title,
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier.fillMaxSize()
+                                        )
+                                    } else {
+                                        Icon(
+                                            imageVector = if (isAudioOnlyMode) Icons.Default.Album else Icons.Default.Movie,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(36.dp)
+                                        )
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.BottomEnd)
+                                            .padding(5.dp)
+                                            .background(Color.Black.copy(alpha = 0.78f), RoundedCornerShape(5.dp))
+                                            .padding(horizontal = 5.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            text = info.durationFormatted,
+                                            fontSize = 9.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            color = Color.White,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Text(
+                                        text = info.title,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Person,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(13.dp)
+                                        )
+                                        Text(
+                                            text = info.creator,
+                                            fontSize = 11.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Text(
+                                        text = "${info.videoFormats.size} Video • ${info.audioFormats.size} Audio formats available",
+                                        fontSize = 10.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
+
+                            // Video / Audio Mode Switch
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                                    .padding(4.dp),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                val videoSelected = !isAudioOnlyMode
+                                Surface(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(9.dp))
+                                        .clickable(enabled = info.videoFormats.isNotEmpty()) {
+                                            isAudioOnlyMode = false
+                                            selectedFormatIndex = 0
+                                        }
+                                        .testTag("mode_video_tab"),
+                                    color = if (videoSelected) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                    shape = RoundedCornerShape(9.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(vertical = 9.dp),
+                                        horizontalArrangement = Arrangement.Center,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Videocam,
+                                            contentDescription = null,
+                                            tint = if (videoSelected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "Video Formats (${info.videoFormats.size})",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (videoSelected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+
+                                val audioSelected = isAudioOnlyMode
+                                Surface(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(9.dp))
+                                        .clickable(enabled = info.audioFormats.isNotEmpty()) {
+                                            isAudioOnlyMode = true
+                                            selectedFormatIndex = 0
+                                        }
+                                        .testTag("mode_audio_tab"),
+                                    color = if (audioSelected) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                    shape = RoundedCornerShape(9.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(vertical = 9.dp),
+                                        horizontalArrangement = Arrangement.Center,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.GraphicEq,
+                                            contentDescription = null,
+                                            tint = if (audioSelected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "Audio Formats (${info.audioFormats.size})",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (audioSelected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+
+                            // Format Category / Container Filter Chips
+                            if (categories.size > 2) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    categories.forEach { cat ->
+                                        val isCatSelected = selectedCategoryFilter.equals(cat, ignoreCase = true)
+                                        FilterChip(
+                                            selected = isCatSelected,
+                                            onClick = {
+                                                selectedCategoryFilter = cat
+                                                selectedFormatIndex = 0
+                                            },
+                                            label = {
+                                                Text(
+                                                    text = cat,
+                                                    fontSize = 11.sp,
+                                                    fontWeight = if (isCatSelected) FontWeight.ExtraBold else FontWeight.Medium
+                                                )
+                                            },
+                                            colors = FilterChipDefaults.filterChipColors(
+                                                selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                                                selectedLabelColor = MaterialTheme.colorScheme.primary
+                                            )
+                                        )
+                                    }
+                                }
+                            }
+
+                            // Quality Selection Dropdown + Detailed Format Cards
+                            if (activeFormats.isNotEmpty() && selectedFormat != null) {
+                                ExposedDropdownMenuBox(
+                                    expanded = qualityDropdownExpanded,
+                                    onExpandedChange = { qualityDropdownExpanded = it }
+                                ) {
+                                    OutlinedTextField(
+                                        value = "${selectedFormat.qualityLabel}  •  ${selectedFormat.formattedSize(info.durationSeconds)}",
+                                        onValueChange = {},
+                                        readOnly = true,
+                                        label = {
+                                            Text(
+                                                if (isAudioOnlyMode) "Selected Audio Container, Bitrate & Sample Rate"
+                                                else "Selected Video Resolution, Container & Frame Rate"
+                                            )
+                                        },
+                                        trailingIcon = {
+                                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = qualityDropdownExpanded)
+                                        },
+                                        modifier = Modifier
+                                            .menuAnchor()
+                                            .fillMaxWidth()
+                                            .testTag("quality_dropdown"),
+                                        shape = RoundedCornerShape(12.dp)
+                                    )
+
+                                    ExposedDropdownMenu(
+                                        expanded = qualityDropdownExpanded,
+                                        onDismissRequest = { qualityDropdownExpanded = false }
+                                    ) {
+                                        activeFormats.forEachIndexed { idx, fmt ->
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Column {
+                                                        Text(
+                                                            text = fmt.qualityLabel,
+                                                            fontWeight = FontWeight.Bold,
+                                                            fontSize = 13.sp
+                                                        )
+                                                        Text(
+                                                            text = "${fmt.technicalSummary()} • ${fmt.formattedSize(info.durationSeconds)}",
+                                                            fontSize = 11.sp,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                        )
+                                                    }
+                                                },
+                                                onClick = {
+                                                    selectedFormatIndex = idx
+                                                    qualityDropdownExpanded = false
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+
+                                // Selected Format Technical Specification Strip
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(10.dp),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "SELECTED STREAM SPECIFICATIONS",
+                                                fontSize = 9.sp,
+                                                fontFamily = FontFamily.Monospace,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                            Text(
+                                                text = selectedFormat.formattedSize(info.durationSeconds),
+                                                fontSize = 11.sp,
+                                                fontFamily = FontFamily.Monospace,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = SuccessGreen
+                                            )
+                                        }
+                                        Text(
+                                            text = selectedFormat.technicalSummary(),
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+                                }
+
+                                // Interactive format cards for quick one-tap selection
+                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    activeFormats.forEachIndexed { idx, fmt ->
+                                        val isSelected = idx == safeIndex
+                                        Surface(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .clickable { selectedFormatIndex = idx }
+                                                .border(
+                                                    width = if (isSelected) 1.5.dp else 1.dp,
+                                                    color = if (isSelected) MaterialTheme.colorScheme.primary
+                                                    else MaterialTheme.colorScheme.outline.copy(alpha = 0.25f),
+                                                    shape = RoundedCornerShape(12.dp)
+                                                ),
+                                            color = if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                                            else MaterialTheme.colorScheme.surface
+                                        ) {
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                    modifier = Modifier.weight(1f)
+                                                ) {
+                                                    RadioButton(
+                                                        selected = isSelected,
+                                                        onClick = { selectedFormatIndex = idx }
+                                                    )
+                                                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                                        Row(
+                                                            verticalAlignment = Alignment.CenterVertically,
+                                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                        ) {
+                                                            Surface(
+                                                                shape = RoundedCornerShape(4.dp),
+                                                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                                                            ) {
+                                                                Text(
+                                                                    text = ".${fmt.container.uppercase(Locale.US)}",
+                                                                    fontSize = 9.sp,
+                                                                    fontFamily = FontFamily.Monospace,
+                                                                    fontWeight = FontWeight.ExtraBold,
+                                                                    color = MaterialTheme.colorScheme.primary,
+                                                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                                                )
+                                                            }
+                                                            Text(
+                                                                text = fmt.qualityLabel,
+                                                                fontSize = 12.sp,
+                                                                fontWeight = FontWeight.Bold,
+                                                                color = MaterialTheme.colorScheme.onSurface
+                                                            )
+                                                        }
+                                                        Row(
+                                                            verticalAlignment = Alignment.CenterVertically,
+                                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                        ) {
+                                                            if (fmt.isOriginalBest) {
+                                                                Surface(
+                                                                    shape = RoundedCornerShape(4.dp),
+                                                                    color = SuccessGreen.copy(alpha = 0.18f)
+                                                                ) {
+                                                                    Text(
+                                                                        text = "BEST",
+                                                                        fontSize = 8.sp,
+                                                                        fontWeight = FontWeight.ExtraBold,
+                                                                        color = SuccessGreen,
+                                                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                                                    )
+                                                                }
+                                                            }
+                                                            if (!fmt.isAudioOnly && fmt.fps >= 60) {
+                                                                Surface(
+                                                                    shape = RoundedCornerShape(4.dp),
+                                                                    color = NeonCyan.copy(alpha = 0.16f)
+                                                                ) {
+                                                                    Text(
+                                                                        text = "60 FPS",
+                                                                        fontSize = 8.sp,
+                                                                        fontWeight = FontWeight.ExtraBold,
+                                                                        color = NeonCyan,
+                                                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                                                    )
+                                                                }
+                                                            }
+                                                            if (fmt.isLossless) {
+                                                                Surface(
+                                                                    shape = RoundedCornerShape(4.dp),
+                                                                    color = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.18f)
+                                                                ) {
+                                                                    Text(
+                                                                        text = "LOSSLESS PCM",
+                                                                        fontSize = 8.sp,
+                                                                        fontWeight = FontWeight.ExtraBold,
+                                                                        color = MaterialTheme.colorScheme.tertiary,
+                                                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                                                    )
+                                                                }
+                                                            }
+                                                            if (fmt.needsMerging) {
+                                                                Surface(
+                                                                    shape = RoundedCornerShape(4.dp),
+                                                                    color = NeonCyan.copy(alpha = 0.16f)
+                                                                ) {
+                                                                    Text(
+                                                                        text = "MUX V+A",
+                                                                        fontSize = 8.sp,
+                                                                        fontWeight = FontWeight.ExtraBold,
+                                                                        color = NeonCyan,
+                                                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                                                    )
+                                                                }
+                                                            }
+                                                            Text(
+                                                                text = buildFormatSubtitle(fmt, info.durationSeconds),
+                                                                fontSize = 10.sp,
+                                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                                maxLines = 1,
+                                                                overflow = TextOverflow.Ellipsis
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                                Text(
+                                                    text = fmt.formattedSize(info.durationSeconds),
+                                                    fontSize = 11.sp,
+                                                    fontFamily = FontFamily.Monospace,
+                                                    fontWeight = FontWeight.ExtraBold,
+                                                    color = MaterialTheme.colorScheme.primary
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Start Download Button
+                                Button(
+                                    onClick = {
+                                        val allGranted = requiredPermissions.all { perm ->
+                                            ContextCompat.checkSelfPermission(context, perm) == PackageManager.PERMISSION_GRANTED
+                                        }
+                                        hasStoragePermissions = allGranted
+                                        if (!allGranted && requiredPermissions.isNotEmpty()) {
+                                            pendingDownloadAction = {
+                                                downloadManager.startDownload(info, selectedFormat)
+                                            }
+                                            permissionLauncher.launch(requiredPermissions)
+                                        } else {
+                                            downloadManager.startDownload(info, selectedFormat)
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(52.dp)
+                                        .testTag("start_download_button"),
+                                    shape = RoundedCornerShape(14.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = SuccessGreen)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.DownloadForOffline,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = if (isAudioOnlyMode) {
+                                            "Download Audio (${selectedFormat.container.uppercase(Locale.US)} • ${selectedFormat.bitrateKbps} kbps)"
+                                        } else {
+                                            "Download Video (${selectedFormat.resolutionHeight}p ${selectedFormat.container.uppercase(Locale.US)})"
+                                        },
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 14.sp,
+                                        color = Color.White
+                                    )
+                                }
+                            } else {
+                                Text(
+                                    text = "No formats available in this mode.",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4. Dedicated Download Manager Section
+        item(key = "download_manager_header") {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.FolderSpecial,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = "DOWNLOAD MANAGER (${tasks.size})",
+                            fontSize = 13.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Black,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Text(
+                        text = "Download/Dragon Tools/Video|Audio",
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                // Filter Chips: ALL, DOWNLOADING, PROCESSING, COMPLETED, PAUSED, FAILED
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf(
+                        "ALL" to "All (${tasks.size})",
+                        "DOWNLOADING" to "Downloading",
+                        "PROCESSING" to "Processing",
+                        "COMPLETED" to "Completed",
+                        "PAUSED" to "Paused",
+                        "FAILED" to "Failed"
+                    ).forEach { (key, label) ->
+                        FilterChip(
+                            selected = managerFilter == key,
+                            onClick = { managerFilter = key },
+                            label = { Text(label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold) }
+                        )
+                    }
+                }
+            }
+        }
+
+        val filteredTasks = tasks.filter { t ->
+            when (managerFilter) {
+                "DOWNLOADING" -> t.stage == DownloadStateStage.DOWNLOADING_VIDEO || t.stage == DownloadStateStage.DOWNLOADING_AUDIO
+                "PROCESSING" -> t.stage == DownloadStateStage.MERGING_STREAMS || t.stage == DownloadStateStage.CONVERTING_MEDIA || t.stage == DownloadStateStage.VALIDATING_OUTPUT
+                "COMPLETED" -> t.stage == DownloadStateStage.COMPLETED
+                "PAUSED" -> t.stage == DownloadStateStage.PAUSED
+                "FAILED" -> t.stage == DownloadStateStage.FAILED
+                else -> true
+            }
+        }
+
+        if (filteredTasks.isEmpty()) {
+            item(key = "empty_downloads_state") {
+                Card(
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f)),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 32.dp, horizontal = 16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CloudQueue,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.size(38.dp)
+                        )
+                        Text(
+                            text = "No downloads in this category",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Paste a supported media link above to inspect streams and download verified MP4 or audio files.",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        } else {
+            items(filteredTasks, key = { it.id }) { task ->
+                DownloadTaskCard(
+                    task = task,
+                    onPause = { downloadManager.pauseDownload(task.id) },
+                    onResume = { downloadManager.resumeDownload(task.id) },
+                    onCancel = { downloadManager.cancelDownload(task.id) },
+                    onRetry = { downloadManager.retryDownload(task.id) },
+                    onOpen = { downloadManager.openDownloadedFile(context, task) },
+                    onShare = { downloadManager.shareDownloadedFile(context, task) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DownloadTaskCard(
+    task: DownloaderTask,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
+    onCancel: () -> Unit,
+    onRetry: () -> Unit,
+    onOpen: () -> Unit,
+    onShare: () -> Unit
+) {
+    val statusColor = when (task.stage) {
+        DownloadStateStage.COMPLETED -> SuccessGreen
+        DownloadStateStage.FAILED -> DangerRed
+        DownloadStateStage.PAUSED -> WarningOrange
+        DownloadStateStage.MERGING_STREAMS,
+        DownloadStateStage.CONVERTING_MEDIA,
+        DownloadStateStage.VALIDATING_OUTPUT -> NeonCyan
+        else -> MaterialTheme.colorScheme.primary
+    }
+
+    Card(
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, statusColor.copy(alpha = 0.35f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("download_task_card_${task.id}")
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Thumbnail or Audio Artwork
+                Box(
+                    modifier = Modifier
+                        .size(76.dp, 56.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (task.thumbnailUrl.isNotBlank()) {
+                        AsyncImage(
+                            model = task.thumbnailUrl,
+                            contentDescription = task.filename,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        Icon(
+                            imageVector = if (task.isAudioOnly) Icons.Default.AudioFile else Icons.Default.VideoFile,
+                            contentDescription = null,
+                            tint = statusColor,
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
+                }
+
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = task.filename,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = statusColor.copy(alpha = 0.16f)
+                        ) {
+                            Text(
+                                text = task.stage.displayLabel.uppercase(Locale.US),
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Black,
+                                color = statusColor,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "${task.platform.displayName} • ${task.qualityLabel}",
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    // Size & Speed / Verified Details
+                    val targetSaveFolder = if (task.isAudioOnly) {
+                        "Internal Storage > Download > Dragon Tools > Audio"
+                    } else {
+                        "Internal Storage > Download > Dragon Tools > Video"
+                    }
+                    Text(
+                        text = targetSaveFolder,
+                        fontSize = 9.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    if (task.stage == DownloadStateStage.COMPLETED) {
+                        val verifiedMeta = listOfNotNull(
+                            task.totalSizeFormatted,
+                            task.verifiedResolution,
+                            task.verifiedCodec,
+                            task.verifiedDuration
+                        ).joinToString(" • ")
+                        Text(
+                            text = "Verified: $verifiedMeta",
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = SuccessGreen
+                        )
+                    } else {
+                        Text(
+                            text = "${task.downloadedSizeFormatted} / ${task.totalSizeFormatted}  •  ETA: ${task.etaFormatted}",
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            // Progress Bar for Active / Paused Tasks
+            if (task.stage.isActive || task.stage == DownloadStateStage.PAUSED) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = task.speedFormatted,
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            color = statusColor
+                        )
+                        Text(
+                            text = if (task.progress >= 0f) "${(task.progress * 100).toInt()}%" else "Streaming...",
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+
+                    if (task.progress >= 0f) {
+                        LinearProgressIndicator(
+                            progress = { task.progress.coerceIn(0f, 1f) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(6.dp)
+                                .clip(RoundedCornerShape(3.dp)),
+                            color = statusColor
+                        )
+                    } else {
+                        LinearProgressIndicator(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(6.dp)
+                                .clip(RoundedCornerShape(3.dp)),
+                            color = statusColor
+                        )
+                    }
+                }
+            }
+
+            // Error details if failed
+            if (task.stage == DownloadStateStage.FAILED && !task.errorMessage.isNullOrBlank()) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = DangerRed.copy(alpha = 0.12f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "${task.errorType?.title ?: "Error"}: ${task.errorMessage}",
+                        fontSize = 10.sp,
+                        color = DangerRed,
+                        modifier = Modifier.padding(8.dp)
+                    )
+                }
+            }
+
+            // Action Buttons Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                when (task.stage) {
+                    DownloadStateStage.DOWNLOADING_VIDEO,
+                    DownloadStateStage.DOWNLOADING_AUDIO -> {
+                        if (task.supportsPauseResume) {
+                            OutlinedButton(
+                                onClick = onPause,
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                modifier = Modifier.height(34.dp)
+                            ) {
+                                Icon(Icons.Default.Pause, contentDescription = "Pause", modifier = Modifier.size(15.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Pause", fontSize = 11.sp)
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                        }
+                    }
+                    DownloadStateStage.PAUSED -> {
+                        FilledTonalButton(
+                            onClick = onResume,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                            modifier = Modifier.height(34.dp)
+                        ) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = "Resume", modifier = Modifier.size(15.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Resume", fontSize = 11.sp)
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                    }
+                    DownloadStateStage.FAILED -> {
+                        FilledTonalButton(
+                            onClick = onRetry,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                            modifier = Modifier.height(34.dp)
+                        ) {
+                            Icon(Icons.Default.Refresh, contentDescription = "Retry", modifier = Modifier.size(15.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Retry", fontSize = 11.sp)
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                    }
+                    DownloadStateStage.COMPLETED -> {
+                        FilledTonalButton(
+                            onClick = onOpen,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                            modifier = Modifier
+                                .height(34.dp)
+                                .testTag("open_file_button_${task.id}")
+                        ) {
+                            Icon(Icons.Default.PlayCircle, contentDescription = "Open File", modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Open File", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        OutlinedButton(
+                            onClick = onShare,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                            modifier = Modifier
+                                .height(34.dp)
+                                .testTag("share_file_button_${task.id}")
+                        ) {
+                            Icon(Icons.Default.Share, contentDescription = "Share File", modifier = Modifier.size(15.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Share", fontSize = 11.sp)
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                    }
+                    else -> {}
+                }
+
+                IconButton(
+                    onClick = onCancel,
+                    modifier = Modifier.size(34.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Cancel or Remove",
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BackendConfigDialog(
+    currentUrl: String,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit
+) {
+    var input by remember { mutableStateOf(currentUrl) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "Downloader Engine & Backend API",
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = "By default, Dragon Tool uses its built-in Native Extraction & Android MediaMuxer Engine. You can also connect a self-hosted Dragon Tool Node.js + FFmpeg backend (/api/media/info, /api/media/download).",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedTextField(
+                    value = input,
+                    onValueChange = { input = it },
+                    label = { Text("Backend Base URL (Optional)") },
+                    placeholder = { Text("https://your-backend.run.app") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onSave(input) }) {
+                Text("Save")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+@Composable
+private fun PrivateAccessSessionDialog(
+    webViewExtractor: WebViewMediaExtractor,
+    restrictedBypassEnabled: Boolean,
+    sessionCounter: Int,
+    onDismiss: () -> Unit,
+    onOpenWebViewLogin: (String, String) -> Unit
+) {
+    var domainInput by remember { mutableStateOf("youtube.com") }
+    var cookieInput by remember { mutableStateOf("") }
+    val customCookies = remember(sessionCounter) { webViewExtractor.getAllCustomCookies() }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(Icons.Default.LockOpen, contentDescription = null, tint = SuccessGreen)
+                Text(
+                    text = "Private & Restricted Content Access",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Age-Gate & Restricted Embed Resolver",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Uses Embedded TV/Player APIs, Syndication endpoints, and 18+ consent cookies automatically.",
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = restrictedBypassEnabled,
+                        onCheckedChange = { webViewExtractor.setRestrictedBypassEnabled(it) }
+                    )
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+
+                Text(
+                    text = "Sign In to Platform (In-App Browser Session)",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    text = "Sign in to your account to fetch private, friends-only, or login-gated videos:",
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                val loginPlatforms = listOf(
+                    Triple("YouTube", "https://accounts.google.com/ServiceLogin?service=youtube", MediaPlatform.YOUTUBE),
+                    Triple("Instagram", "https://www.instagram.com/accounts/login/", MediaPlatform.INSTAGRAM),
+                    Triple("Facebook", "https://m.facebook.com/login/", MediaPlatform.FACEBOOK),
+                    Triple("TikTok", "https://www.tiktok.com/login", MediaPlatform.TIKTOK),
+                    Triple("X (Twitter)", "https://x.com/i/flow/login", MediaPlatform.TWITTER),
+                    Triple("Reddit", "https://www.reddit.com/login/", MediaPlatform.REDDIT)
+                )
+
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    loginPlatforms.chunked(2).forEach { pair ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            pair.forEach { (label, loginUrl, plat) ->
+                                val isSigned = remember(sessionCounter) { webViewExtractor.hasAuthenticatedSession(plat) }
+                                OutlinedButton(
+                                    onClick = { onOpenWebViewLogin(label, loginUrl) },
+                                    modifier = Modifier.weight(1f).height(36.dp),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (isSigned) Icons.Default.CheckCircle else Icons.Default.Login,
+                                        contentDescription = null,
+                                        tint = if (isSigned) SuccessGreen else MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = if (isSigned) "$label (Active)" else label,
+                                        fontSize = 10.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+
+                Text(
+                    text = "Custom Cookie Header (Optional)",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                OutlinedTextField(
+                    value = domainInput,
+                    onValueChange = { domainInput = it },
+                    label = { Text("Domain (e.g. youtube.com, instagram.com)", fontSize = 10.sp) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = cookieInput,
+                    onValueChange = { cookieInput = it },
+                    label = { Text("Cookie Header (sessionid=...; SAPISID=...)", fontSize = 10.sp) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (customCookies.isNotEmpty()) {
+                    Text(
+                        text = "Saved custom cookies for: ${customCookies.keys.joinToString(", ")}",
+                        fontSize = 10.sp,
+                        color = SuccessGreen
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (domainInput.isNotBlank() && cookieInput.isNotBlank()) {
+                        webViewExtractor.setCustomCookieForDomain(domainInput, cookieInput)
+                    }
+                    onDismiss()
+                }
+            ) {
+                Text("Save & Done")
+            }
+        },
+        dismissButton = {
+            Row {
+                TextButton(onClick = { webViewExtractor.clearAllSessionData() }) {
+                    Text("Clear Cookies", color = DangerRed, fontSize = 11.sp)
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("Close", fontSize = 11.sp)
+                }
+            }
+        }
+    )
+}
+
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+private fun PlatformWebViewLoginDialog(
+    platformTitle: String,
+    loginUrl: String,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Sign In: $platformTitle",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                TextButton(onClick = onDismiss) {
+                    Text("Done", fontWeight = FontWeight.Bold)
+                }
+            }
+        },
+        text = {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(420.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
+            ) {
+                AndroidView(
+                    factory = { ctx ->
+                        WebView(ctx).apply {
+                            val cm = CookieManager.getInstance()
+                            cm.setAcceptCookie(true)
+                            cm.setAcceptThirdPartyCookies(this, true)
+                            settings.javaScriptEnabled = true
+                            settings.domStorageEnabled = true
+                            webViewClient = object : WebViewClient() {
+                                override fun onPageFinished(view: WebView?, url: String?) {
+                                    super.onPageFinished(view, url)
+                                    CookieManager.getInstance().flush()
+                                }
+                            }
+                            loadUrl(loginUrl)
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = onDismiss) {
+                Text("Save Session & Return")
+            }
+        }
+    )
+}
+
+private fun buildFormatSubtitle(fmt: MediaFormatOption, durationSeconds: Long): String {
+    return fmt.technicalSummary()
+}
+
+private fun platformIcon(platform: MediaPlatform): ImageVector {
+    return when (platform) {
+        MediaPlatform.YOUTUBE, MediaPlatform.YOUTUBE_SHORTS -> Icons.Default.PlayCircleFilled
+        MediaPlatform.TIKTOK -> Icons.Default.MusicVideo
+        MediaPlatform.SNAPCHAT -> Icons.Default.CameraAlt
+        MediaPlatform.FACEBOOK -> Icons.Default.OndemandVideo
+        MediaPlatform.INSTAGRAM -> Icons.Default.MovieFilter
+        MediaPlatform.TWITTER -> Icons.Default.Tag
+        MediaPlatform.REDDIT -> Icons.Default.Forum
+        MediaPlatform.PINTEREST -> Icons.Default.PushPin
+        MediaPlatform.VIMEO -> Icons.Default.Hd
+        MediaPlatform.DIRECT -> Icons.Default.FileDownload
+        else -> Icons.Default.Public
+    }
+}

@@ -1,0 +1,299 @@
+package com.example.data.model
+
+import java.net.URI
+import java.util.Locale
+import kotlin.math.roundToLong
+
+enum class MediaPlatform(
+    val displayName: String,
+    val badgeColor: Long,
+    val shortCode: String
+) {
+    YOUTUBE("YouTube", 0xFFFF0033, "YT"),
+    YOUTUBE_SHORTS("YouTube Shorts", 0xFFFF1744, "SHORTS"),
+    TIKTOK("TikTok", 0xFF00F2FE, "TT"),
+    SNAPCHAT("Snapchat", 0xFFFFFC00, "SNAP"),
+    FACEBOOK("Facebook", 0xFF1877F2, "FB"),
+    INSTAGRAM("Instagram", 0xFFE1306C, "IG"),
+    TWITTER("X (Twitter)", 0xFF1DA1F2, "X"),
+    REDDIT("Reddit", 0xFFFF4500, "RDT"),
+    PINTEREST("Pinterest", 0xFFE60023, "PIN"),
+    VIMEO("Vimeo", 0xFF1AB7EA, "VMO"),
+    DIRECT("Direct Media", 0xFF10B981, "DIRECT"),
+    OTHER("Supported Web Media", 0xFF6366F1, "WEB"),
+    UNSUPPORTED("Unsupported", 0xFF9CA3AF, "N/A");
+
+    companion object {
+        private val DIRECT_EXTENSIONS = setOf(
+            ".mp4", ".m4v", ".mov", ".webm", ".mkv", ".3gp",
+            ".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".opus"
+        )
+
+        fun detectFromUrl(rawUrl: String): MediaPlatform {
+            val trimmed = rawUrl.trim()
+            if (trimmed.isEmpty()) return UNSUPPORTED
+            val normalized = if (!trimmed.startsWith("http://", true) && !trimmed.startsWith("https://", true)) {
+                "https://$trimmed"
+            } else {
+                trimmed
+            }
+
+            val host: String
+            val path: String
+            try {
+                val uri = URI(normalized)
+                host = (uri.host ?: "").lowercase(Locale.US).removePrefix("www.").removePrefix("m.")
+                path = (uri.path ?: "").lowercase(Locale.US)
+            } catch (_: Exception) {
+                val lower = trimmed.lowercase(Locale.US)
+                return when {
+                    lower.contains("youtube.com/shorts") -> YOUTUBE_SHORTS
+                    lower.contains("youtube.com") || lower.contains("youtu.be") -> YOUTUBE
+                    lower.contains("tiktok.com") -> TIKTOK
+                    lower.contains("snapchat.com") -> SNAPCHAT
+                    lower.contains("facebook.com") || lower.contains("fb.watch") -> FACEBOOK
+                    lower.contains("instagram.com") || lower.contains("instagr.am") -> INSTAGRAM
+                    lower.contains("twitter.com") || lower.contains("x.com") -> TWITTER
+                    lower.contains("reddit.com") || lower.contains("redd.it") -> REDDIT
+                    lower.contains("pinterest.") || lower.contains("pin.it") -> PINTEREST
+                    lower.contains("vimeo.com") -> VIMEO
+                    DIRECT_EXTENSIONS.any { lower.substringBefore("?").endsWith(it) } -> DIRECT
+                    else -> UNSUPPORTED
+                }
+            }
+
+            if (host.isEmpty()) return UNSUPPORTED
+
+            return when {
+                (host == "youtube.com" || host.endsWith(".youtube.com")) && path.startsWith("/shorts/") -> YOUTUBE_SHORTS
+                host == "youtube.com" || host.endsWith(".youtube.com") || host == "youtu.be" || host == "youtube-nocookie.com" -> YOUTUBE
+                host == "tiktok.com" || host.endsWith(".tiktok.com") || host == "vm.tiktok.com" || host == "vt.tiktok.com" -> TIKTOK
+                host == "snapchat.com" || host.endsWith(".snapchat.com") || host == "t.snapchat.com" -> SNAPCHAT
+                host == "facebook.com" || host.endsWith(".facebook.com") || host == "fb.watch" || host == "fb.com" || host == "fb.gg" -> FACEBOOK
+                host == "instagram.com" || host.endsWith(".instagram.com") || host == "instagr.am" -> INSTAGRAM
+                host == "twitter.com" || host.endsWith(".twitter.com") || host == "x.com" || host.endsWith(".x.com") || host == "t.co" || host == "fxtwitter.com" || host == "vxtwitter.com" -> TWITTER
+                host == "reddit.com" || host.endsWith(".reddit.com") || host == "redd.it" || host == "v.redd.it" -> REDDIT
+                host.contains("pinterest.") || host == "pin.it" -> PINTEREST
+                host == "vimeo.com" || host.endsWith(".vimeo.com") -> VIMEO
+                DIRECT_EXTENSIONS.any { path.endsWith(it) } -> DIRECT
+                host.contains(".") -> OTHER
+                else -> UNSUPPORTED
+            }
+        }
+    }
+}
+
+enum class DownloadStateStage(val displayLabel: String, val isTerminal: Boolean, val isActive: Boolean) {
+    VALIDATING_URL("Validating URL", false, true),
+    FETCHING_METADATA("Fetching Metadata", false, true),
+    SELECTING_FORMAT("Selecting Format", false, true),
+    DOWNLOADING_VIDEO("Downloading Video", false, true),
+    DOWNLOADING_AUDIO("Downloading Audio", false, true),
+    MERGING_STREAMS("Merging Audio & Video", false, true),
+    CONVERTING_MEDIA("Converting Media", false, true),
+    VALIDATING_OUTPUT("Validating Output", false, true),
+    PAUSED("Paused", false, false),
+    COMPLETED("Completed", true, false),
+    FAILED("Failed", true, false)
+}
+
+enum class DownloaderErrorType(val title: String) {
+    INVALID_URL("Invalid URL"),
+    UNSUPPORTED_PLATFORM("Unsupported Platform"),
+    UNSUPPORTED_MEDIA("Unsupported Media"),
+    PRIVATE_OR_RESTRICTED("Private or Restricted Content"),
+    DRM_PROTECTED("DRM-Protected Content"),
+    EXPIRED_LINK("Expired Media Link"),
+    NETWORK_FAILURE("Network Connection Failure"),
+    SERVER_UNAVAILABLE("Extraction Service Unavailable"),
+    PROCESSING_FAILURE("Media Processing Failure"),
+    INSUFFICIENT_STORAGE("Insufficient Storage"),
+    DOWNLOAD_INTERRUPTED("Download Interrupted")
+}
+
+data class MediaFormatOption(
+    val id: String,
+    val qualityLabel: String,
+    val resolutionHeight: Int = 0,
+    val width: Int = 0,
+    val fps: Int = 30,
+    val container: String,
+    val mimeType: String,
+    val videoCodec: String? = null,
+    val audioCodec: String? = null,
+    val bitrateKbps: Int = 0,
+    val bitrateLabel: String = "",
+    val sampleRateHz: Int = 44100,
+    val channels: Int = 2,
+    val contentLengthBytes: Long = -1L,
+    val isEstimatedSize: Boolean = false,
+    val isAudioOnly: Boolean = false,
+    val needsMerging: Boolean = false,
+    val requiresAudioConversion: Boolean = false,
+    val isLossless: Boolean = false,
+    val isOriginalBest: Boolean = false,
+    val streamUrl: String,
+    val secondaryAudioStreamUrl: String? = null,
+    val secondaryAudioContentLength: Long = -1L,
+    val requestHeaders: Map<String, String> = emptyMap(),
+    val formatCategory: String = "",
+    val channelLayout: String = "Stereo 2.0",
+    val audioBitDepth: Int = 16,
+    val encodingProfile: String = "",
+    val colorProfile: String = "SDR (Rec.709)",
+    val fallbackStreamUrls: List<String> = emptyList()
+) {
+    val totalEstimatedOrExactBytes: Long
+        get() = when {
+            contentLengthBytes > 0L && secondaryAudioContentLength > 0L -> contentLengthBytes + secondaryAudioContentLength
+            contentLengthBytes > 0L -> contentLengthBytes
+            else -> -1L
+        }
+
+    fun formattedSize(durationSeconds: Long = 0L): String {
+        val bytes = calculateBytes(durationSeconds)
+        if (bytes <= 0L) return "Size on stream"
+        val prefix = if (isEstimatedSize || totalEstimatedOrExactBytes <= 0L) "~" else ""
+        return prefix + formatBytes(bytes)
+    }
+
+    fun calculateBytes(durationSeconds: Long = 0L): Long {
+        if (totalEstimatedOrExactBytes > 0L) return totalEstimatedOrExactBytes
+        val effectiveDuration = if (durationSeconds > 0L) durationSeconds else 30L
+        if (bitrateKbps > 0) {
+            return (bitrateKbps * 1000L * effectiveDuration) / 8L
+        }
+        return -1L
+    }
+
+    fun technicalSummary(): String {
+        return if (isAudioOnly) {
+            buildString {
+                append(container.uppercase(Locale.US))
+                if (!audioCodec.isNullOrBlank()) append(" • $audioCodec")
+                if (bitrateKbps > 0) append(" • $bitrateKbps kbps")
+                if (sampleRateHz > 0) {
+                    val khz = if (sampleRateHz % 1000 == 0) "${sampleRateHz / 1000} kHz" else "${sampleRateHz / 1000.0} kHz"
+                    append(" • $khz")
+                }
+                val chLabel = if (channelLayout.isNotBlank()) channelLayout else if (channels == 1) "Mono 1.0" else "Stereo 2.0"
+                append(" • $chLabel")
+                if (encodingProfile.isNotBlank()) append(" • $encodingProfile")
+            }
+        } else {
+            buildString {
+                append(container.uppercase(Locale.US))
+                if (width > 0 && resolutionHeight > 0) append(" • ${width}×${resolutionHeight}")
+                else if (resolutionHeight > 0) append(" • ${resolutionHeight}p")
+                if (fps > 0) append(" • ${fps}fps")
+                if (!videoCodec.isNullOrBlank()) append(" • $videoCodec")
+                if (!audioCodec.isNullOrBlank()) append(" + $audioCodec")
+                if (bitrateKbps > 0) append(" • $bitrateKbps kbps")
+                if (encodingProfile.isNotBlank()) append(" • $encodingProfile")
+            }
+        }
+    }
+}
+
+data class MediaInfo(
+    val originalUrl: String,
+    val canonicalUrl: String,
+    val title: String,
+    val creator: String,
+    val durationSeconds: Long,
+    val durationFormatted: String,
+    val thumbnailUrl: String,
+    val platform: MediaPlatform,
+    val videoFormats: List<MediaFormatOption>,
+    val audioFormats: List<MediaFormatOption>,
+    val extractorSource: String = "Native Extraction Pipeline",
+    val extractedAtMs: Long = System.currentTimeMillis()
+) {
+    val allFormats: List<MediaFormatOption>
+        get() = videoFormats + audioFormats
+}
+
+data class DownloaderTask(
+    val id: String,
+    val jobId: String = id,
+    val url: String,
+    val title: String,
+    val creator: String,
+    val filename: String,
+    val thumbnailUrl: String,
+    val platform: MediaPlatform,
+    val qualityLabel: String,
+    val container: String,
+    val mimeType: String,
+    val isAudioOnly: Boolean,
+    val formatOption: MediaFormatOption,
+    val stage: DownloadStateStage,
+    val progress: Float, // 0.0f..1.0f, or -1f if indeterminate
+    val speedBytesPerSec: Long = 0L,
+    val speedFormatted: String = "0 KB/s",
+    val downloadedBytes: Long = 0L,
+    val totalBytes: Long = -1L,
+    val isTotalSizeEstimated: Boolean = false,
+    val etaSeconds: Long = -1L,
+    val etaFormatted: String = "--",
+    val supportsPauseResume: Boolean = true,
+    val filePath: String? = null,
+    val publicUriString: String? = null,
+    val verifiedResolution: String? = null,
+    val verifiedDuration: String? = null,
+    val verifiedCodec: String? = null,
+    val errorType: DownloaderErrorType? = null,
+    val errorMessage: String? = null,
+    val createdAtMs: Long = System.currentTimeMillis()
+) {
+    val downloadedSizeFormatted: String
+        get() = formatBytes(downloadedBytes)
+
+    val totalSizeFormatted: String
+        get() = if (totalBytes > 0L) {
+            (if (isTotalSizeEstimated && stage != DownloadStateStage.COMPLETED) "~" else "") + formatBytes(totalBytes)
+        } else {
+            "Unknown size"
+        }
+}
+
+fun formatBytes(bytes: Long): String {
+    if (bytes <= 0L) return "0 B"
+    val kb = 1024.0
+    val mb = kb * 1024.0
+    val gb = mb * 1024.0
+    return when {
+        bytes >= gb -> String.format(Locale.US, "%.2f GB", bytes / gb)
+        bytes >= mb -> String.format(Locale.US, "%.2f MB", bytes / mb)
+        bytes >= kb -> String.format(Locale.US, "%.1f KB", bytes / kb)
+        else -> "$bytes B"
+    }
+}
+
+fun formatDurationSeconds(seconds: Long): String {
+    if (seconds <= 0L) return "Live / Direct"
+    val hrs = seconds / 3600
+    val mins = (seconds % 3600) / 60
+    val secs = seconds % 60
+    return if (hrs > 0) {
+        String.format(Locale.US, "%d:%02d:%02d", hrs, mins, secs)
+    } else {
+        String.format(Locale.US, "%d:%02d", mins, secs)
+    }
+}
+
+fun formatEtaSeconds(seconds: Long): String {
+    if (seconds < 0L) return "--"
+    if (seconds == 0L) return "< 1s"
+    val mins = seconds / 60
+    val secs = seconds % 60
+    return if (mins >= 60) {
+        val hrs = mins / 60
+        val remMins = mins % 60
+        "${hrs}h ${remMins}m"
+    } else if (mins > 0) {
+        "${mins}m ${secs}s"
+    } else {
+        "${secs}s"
+    }
+}

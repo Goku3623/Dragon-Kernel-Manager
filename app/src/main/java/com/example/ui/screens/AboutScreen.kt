@@ -1,10 +1,7 @@
 package com.example.ui.screens
 
-import android.content.Intent
-import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
@@ -18,7 +15,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -26,12 +22,12 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.repository.KernelRepository
-import com.example.ui.theme.SuccessGreen
 
 @Composable
 fun AboutScreen(repository: KernelRepository) {
     val context = LocalContext.current
     val isRootGranted by repository.isRootGrantedFlow.collectAsState()
+    val deviceInfo by repository.deviceInfoFlow.collectAsState()
 
     LazyColumn(
         modifier = Modifier
@@ -66,7 +62,7 @@ fun AboutScreen(repository: KernelRepository) {
                     ) {
                         Icon(
                             imageVector = Icons.Default.Bolt,
-                            contentDescription = "Dragon Kernel",
+                            contentDescription = "Dragon Tools",
                             tint = Color.Black,
                             modifier = Modifier.size(54.dp)
                         )
@@ -75,7 +71,7 @@ fun AboutScreen(repository: KernelRepository) {
                     Spacer(modifier = Modifier.height(14.dp))
 
                     Text(
-                        text = "Dragon Kernel Manager",
+                        text = "Dragon Tools",
                         fontSize = 24.sp,
                         fontWeight = FontWeight.Black,
                         letterSpacing = 1.sp,
@@ -83,7 +79,7 @@ fun AboutScreen(repository: KernelRepository) {
                     )
 
                     Text(
-                        text = "Kernel Manager for Xiaomi POCO F6",
+                        text = "Hardware Telemetry & System Utilities for ${deviceInfo.manufacturer} ${deviceInfo.model}",
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -96,7 +92,7 @@ fun AboutScreen(repository: KernelRepository) {
                         modifier = Modifier.padding(horizontal = 8.dp)
                     ) {
                         Text(
-                            text = "Version 1.0 (Stable Release)",
+                            text = "Version 1.0 (Dragon Release)",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary
@@ -146,7 +142,7 @@ fun AboutScreen(repository: KernelRepository) {
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = "Kernel & System Architect for POCO F6 (peridot)",
+                                text = "System Architect for ${deviceInfo.model} (${deviceInfo.deviceCode})",
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -169,25 +165,23 @@ fun AboutScreen(repository: KernelRepository) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.PhoneAndroid, contentDescription = "Device", tint = MaterialTheme.colorScheme.primary)
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Device & Kernel Environment", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        Text("Device & System Environment", fontWeight = FontWeight.Bold, fontSize = 15.sp)
                     }
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    AboutDetailRow("Target Device", "Xiaomi POCO F6 (peridot)")
-                    AboutDetailRow("SoC Chipset", "Qualcomm Snapdragon 8s Gen 3 (SM8635)")
-                    AboutDetailRow("GPU Architecture", "Qualcomm Adreno 735 (Max 1100 MHz)")
-                    AboutDetailRow("Charging Spec", "90W HyperCharge (5000 mAh Cell)")
-                    AboutDetailRow("Kernel Version", "Linux 6.1.75-Dragon-Kernel-v1.0")
-                    AboutDetailRow("Hardware Telemetry", if (isRootGranted) "Active (Hardware Sync Enabled)" else "Active Telemetry Mode")
-                    AboutDetailRow("SELinux Policy", "Enforcing (Custom Rules Supported)")
+                    AboutDetailRow("Target Device", "${deviceInfo.manufacturer} ${deviceInfo.model} (${deviceInfo.deviceCode})")
+                    AboutDetailRow("SoC Chipset", "${deviceInfo.socName} (${deviceInfo.boardHardware})")
+                    AboutDetailRow("GPU Architecture", deviceInfo.gpuName)
+                    AboutDetailRow("OS / Kernel", "${deviceInfo.androidVersion} • ${deviceInfo.kernelVersion}")
+                    AboutDetailRow("Hardware Telemetry", if (isRootGranted) "Active (Root Hardware Access Enabled)" else "Active Telemetry Mode")
+                    AboutDetailRow("SELinux Policy", "Enforcing")
                 }
             }
             Spacer(modifier = Modifier.height(24.dp))
         }
 
         item {
-            // Big title at the bottom as requested: "Unlock Your Freedom" with the app name
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -215,7 +209,7 @@ fun AboutScreen(repository: KernelRepository) {
                     Spacer(modifier = Modifier.height(8.dp))
 
                     Text(
-                        text = "Dragon Kernel Manager",
+                        text = "Dragon Tools",
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 2.sp,
@@ -224,7 +218,6 @@ fun AboutScreen(repository: KernelRepository) {
 
                     Spacer(modifier = Modifier.height(4.dp))
 
-                    // THE BIG PROMINENT TITLE: "Unlock Your Freedom"
                     Text(
                         text = "Unlock Your Freedom",
                         fontSize = 28.sp,
@@ -237,7 +230,7 @@ fun AboutScreen(repository: KernelRepository) {
                     Spacer(modifier = Modifier.height(8.dp))
 
                     Text(
-                        text = "Crafted with passion for POCO F6 power users and hardware enthusiasts worldwide by LDxGoku.",
+                        text = "Crafted with passion for ${deviceInfo.model} power users and hardware enthusiasts worldwide by LDxGoku.",
                         fontSize = 11.sp,
                         textAlign = TextAlign.Center,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,

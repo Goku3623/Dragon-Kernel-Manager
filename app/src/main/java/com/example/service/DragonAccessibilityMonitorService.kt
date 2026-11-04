@@ -21,6 +21,10 @@ class DragonAccessibilityMonitorService : AccessibilityService() {
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             val pkg = event.packageName?.toString() ?: return
             val className = event.className?.toString() ?: ""
+            // Ignore floating overlay window attach/update events emitted by our own package
+            if (pkg == applicationContext.packageName && !className.contains("MainActivity", ignoreCase = true)) {
+                return
+            }
             KernelRepository.getInstance(applicationContext).onForegroundAppChanged(pkg, className)
         }
     }

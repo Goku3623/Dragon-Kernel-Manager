@@ -199,22 +199,22 @@ fun ThemeStudioSection(
             }
         }
 
-        // 1B. iOS LIQUID GLASS UI ENGINE (TRANSLUCENT FROSTED CRYSTAL & SPECULAR REFRACTION)
+        // 1B. iOS LIQUID GLASS UI ENGINE (COMPACT TRANSLUCENT FROSTED CRYSTAL)
         val isLiquidGlassActive = themeConfig.isLiquidGlassEnabled || themeConfig.surfaceMode == SurfaceThemeMode.IOS_LIQUID_GLASS
         Card(
             modifier = Modifier
                 .fillMaxWidth()
                 .testTag("ios_liquid_glass_card"),
-            shape = cardShape,
+            shape = RoundedCornerShape(14.dp),
             colors = CardDefaults.cardColors(
                 containerColor = if (isLiquidGlassActive) {
-                    Color.White.copy(alpha = (themeConfig.liquidGlassOpacity * 0.45f).coerceIn(0.10f, 0.28f))
+                    Color.White.copy(alpha = (themeConfig.liquidGlassOpacity * 0.40f).coerceIn(0.08f, 0.25f))
                 } else {
                     MaterialTheme.colorScheme.surface
                 }
             ),
             border = androidx.compose.foundation.BorderStroke(
-                width = if (isLiquidGlassActive) 1.4.dp else 1.dp,
+                width = if (isLiquidGlassActive) 1.2.dp else 1.dp,
                 color = if (isLiquidGlassActive) {
                     Color.White.copy(alpha = (0.45f * themeConfig.liquidGlassRefraction).coerceIn(0.22f, 0.75f))
                 } else {
@@ -229,22 +229,21 @@ fun ThemeStudioSection(
                         Brush.linearGradient(
                             colors = if (isLiquidGlassActive) {
                                 listOf(
-                                    Color.White.copy(alpha = 0.16f * themeConfig.liquidGlassRefraction),
-                                    Color(0xFF38BDF8).copy(alpha = 0.12f),
-                                    Color(0xFFA855F7).copy(alpha = 0.10f),
+                                    Color.White.copy(alpha = 0.14f * themeConfig.liquidGlassRefraction),
+                                    Color(0xFF38BDF8).copy(alpha = 0.10f),
                                     Color.Transparent
                                 )
                             } else {
                                 listOf(
-                                    Color(0xFF38BDF8).copy(alpha = 0.08f),
+                                    Color(0xFF38BDF8).copy(alpha = 0.06f),
                                     Color.Transparent
                                 )
                             }
                         )
                     )
-                    .padding(16.dp)
+                    .padding(12.dp)
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -256,21 +255,20 @@ fun ThemeStudioSection(
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .size(38.dp)
-                                    .clip(RoundedCornerShape(12.dp))
+                                    .size(32.dp)
+                                    .clip(RoundedCornerShape(10.dp))
                                     .background(
                                         Brush.linearGradient(
                                             colors = listOf(
-                                                Color.White.copy(alpha = 0.32f),
-                                                Color(0xFF38BDF8).copy(alpha = 0.28f),
-                                                Color(0xFFA855F7).copy(alpha = 0.28f)
+                                                Color.White.copy(alpha = 0.30f),
+                                                Color(0xFF38BDF8).copy(alpha = 0.25f)
                                             )
                                         )
                                     )
                                     .border(
                                         1.dp,
-                                        Color.White.copy(alpha = 0.55f),
-                                        RoundedCornerShape(12.dp)
+                                        Color.White.copy(alpha = 0.50f),
+                                        RoundedCornerShape(10.dp)
                                     ),
                                 contentAlignment = Alignment.Center
                             ) {
@@ -278,47 +276,47 @@ fun ThemeStudioSection(
                                     imageVector = Icons.Default.BlurOn,
                                     contentDescription = "iOS Liquid Glass",
                                     tint = Color.White,
-                                    modifier = Modifier.size(20.dp)
+                                    modifier = Modifier.size(18.dp)
                                 )
                             }
-                            Spacer(modifier = Modifier.width(12.dp))
+                            Spacer(modifier = Modifier.width(10.dp))
                             Column {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
                                     Text(
-                                        text = "iOS Liquid Glass (Frosted Ice)",
-                                        style = MaterialTheme.typography.titleSmall,
+                                        text = "iOS Liquid Glass (Compact)",
+                                        fontSize = 13.sp,
                                         fontWeight = FontWeight.Black,
                                         color = MaterialTheme.colorScheme.onSurface
                                     )
                                     Surface(
-                                        shape = RoundedCornerShape(6.dp),
-                                        color = Color(0xFF38BDF8).copy(alpha = 0.22f),
+                                        shape = RoundedCornerShape(4.dp),
+                                        color = Color(0xFF38BDF8).copy(alpha = 0.20f),
                                         border = androidx.compose.foundation.BorderStroke(
-                                            0.8.dp,
-                                            Color(0xFFE0F7FA).copy(alpha = 0.65f)
+                                            0.6.dp,
+                                            Color(0xFFE0F7FA).copy(alpha = 0.60f)
                                         )
                                     ) {
                                         Text(
-                                            text = "FROSTED ICE",
-                                            style = MaterialTheme.typography.labelSmall,
+                                            text = "FROST HUD",
+                                            fontSize = 8.sp,
                                             fontFamily = FontFamily.Monospace,
                                             fontWeight = FontWeight.ExtraBold,
                                             color = Color(0xFFE0F7FA),
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
                                         )
                                     }
                                 }
                                 Text(
-                                    text = "Translucent frosted ice crystal cards, sub-zero glacial refraction, floating glass dock & arctic permafrost backdrop",
-                                    style = MaterialTheme.typography.labelSmall,
+                                    text = "Compact frosted crystal HUD, sub-zero refraction & floating glass dock",
+                                    fontSize = 10.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
                         Switch(
                             checked = isLiquidGlassActive,
                             onCheckedChange = { enabled ->
@@ -333,102 +331,51 @@ fun ThemeStudioSection(
                         )
                     }
 
-                    // Interactive Liquid Glass Sample Preview Pill
+                    // Compact Interactive Liquid Glass Sample Preview Pill
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(18.dp))
+                            .clip(RoundedCornerShape(12.dp))
                             .background(
                                 Brush.linearGradient(
                                     colors = listOf(
                                         Color(0xFF051324),
-                                        Color(0xFF0A223E),
-                                        Color(0xFF0F3258)
+                                        Color(0xFF0A223E)
                                     )
                                 )
                             )
                             .border(
                                 width = 1.dp,
-                                color = Color(0xFFE0F7FA).copy(alpha = 0.35f),
-                                shape = RoundedCornerShape(18.dp)
+                                color = Color(0xFFE0F7FA).copy(alpha = 0.30f),
+                                shape = RoundedCornerShape(12.dp)
                             )
-                            .padding(12.dp)
+                            .padding(8.dp)
                     ) {
-                        // Glowing background orbs inside preview box
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(
-                                        Brush.linearGradient(
-                                            colors = listOf(
-                                                Color(0xFFE0F7FA).copy(alpha = (themeConfig.liquidGlassOpacity + 0.10f).coerceAtMost(0.55f)),
-                                                Color(0xFF0D2540).copy(alpha = (themeConfig.liquidGlassOpacity * 0.70f).coerceAtLeast(0.12f))
-                                            )
-                                        )
-                                    )
-                                    .border(
-                                        width = 1.2.dp,
-                                        brush = Brush.linearGradient(
-                                            colors = listOf(
-                                                Color(0xFFE0F7FA).copy(alpha = (0.85f * themeConfig.liquidGlassRefraction).coerceIn(0.35f, 0.95f)),
-                                                Color(0xFF38BDF8).copy(alpha = 0.30f),
-                                                Color(0xFFBAE6FD).copy(alpha = 0.55f * themeConfig.liquidGlassRefraction)
-                                            )
-                                        ),
-                                        shape = RoundedCornerShape(14.dp)
-                                    )
-                                    .padding(horizontal = 12.dp, vertical = 10.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Column {
-                                        Text(
-                                            text = if (isLiquidGlassActive) "FROSTED ICE ENGINE ACTIVE" else "TAP TO ENABLE FROSTED ICE",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            fontFamily = FontFamily.Monospace,
-                                            fontWeight = FontWeight.Black,
-                                            color = Color.White
-                                        )
-                                        Text(
-                                            text = "Tint: ${themeConfig.liquidGlassWallpaperTint} • Frost ${(themeConfig.liquidGlassOpacity * 100).roundToInt()}% • Specular ${(themeConfig.liquidGlassRefraction * 100).roundToInt()}%",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = Color(0xFFE0F7FA)
-                                        )
-                                    }
-                                    FilledTonalButton(
-                                        onClick = { repository.toggleLiquidGlass(!isLiquidGlassActive) },
-                                        shape = RoundedCornerShape(50),
-                                        colors = ButtonDefaults.filledTonalButtonColors(
-                                            containerColor = Color(0xFF38BDF8).copy(alpha = 0.30f),
-                                            contentColor = Color(0xFFE0F7FA)
-                                        ),
-                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                                        modifier = Modifier.height(32.dp)
-                                    ) {
-                                        Text(
-                                            text = if (isLiquidGlassActive) "Disable" else "Apply Ice",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = if (isLiquidGlassActive) "COMPACT LIQUID GLASS ACTIVE" else "TAP SWITCH TO ENABLE LIQUID GLASS",
+                                    fontSize = 9.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Black,
+                                    color = Color.White
+                                )
+                                Text(
+                                    text = "Tint: ${themeConfig.liquidGlassWallpaperTint} • Frost ${(themeConfig.liquidGlassOpacity * 100).roundToInt()}%",
+                                    fontSize = 9.sp,
+                                    color = Color(0xFFE0F7FA)
+                                )
                             }
                         }
                     }
 
-                    // Liquid Glass Controls (always customizable, auto-enables if adjusted)
                     Text(
                         text = "FROSTED ICE REFRACTION TINT",
-                        style = MaterialTheme.typography.labelSmall,
+                        fontSize = 9.sp,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
                         color = primaryColor
@@ -468,21 +415,21 @@ fun ThemeStudioSection(
                                         }
                                         repository.setLiquidGlassWallpaperTint(tintName)
                                     }
-                                    .padding(horizontal = 12.dp, vertical = 7.dp)
+                                    .padding(horizontal = 10.dp, vertical = 5.dp)
                                     .testTag("liquid_glass_tint_${tintName.lowercase().replace(" ", "_")}"),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(14.dp)
+                                        .size(12.dp)
                                         .clip(CircleShape)
                                         .background(Brush.linearGradient(listOf(c1, c2)))
                                         .border(0.8.dp, Color.White.copy(alpha = 0.8f), CircleShape)
                                 )
                                 Text(
                                     text = tintName,
-                                    style = MaterialTheme.typography.labelSmall,
+                                    fontSize = 10.sp,
                                     fontWeight = if (isSelectedTint) FontWeight.ExtraBold else FontWeight.Medium,
                                     color = if (isSelectedTint) Color.White else MaterialTheme.colorScheme.onSurface
                                 )
@@ -490,7 +437,7 @@ fun ThemeStudioSection(
                         }
                     }
 
-                    // Frosted Ice Translucency Slider
+                    // Translucency Slider
                     Column {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -498,13 +445,13 @@ fun ThemeStudioSection(
                         ) {
                             Text(
                                 text = "Frosted Ice Translucency",
-                                style = MaterialTheme.typography.labelMedium,
+                                fontSize = 11.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
                                 text = "${(themeConfig.liquidGlassOpacity * 100).roundToInt()}%",
-                                style = MaterialTheme.typography.labelMedium,
+                                fontSize = 11.sp,
                                 fontFamily = FontFamily.Monospace,
                                 fontWeight = FontWeight.Bold,
                                 color = primaryColor
@@ -525,21 +472,21 @@ fun ThemeStudioSection(
                         )
                     }
 
-                    // Specular Rim Refraction Slider
+                    // Refraction Slider
                     Column {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
-                                text = "Specular Frost Refraction & Prism Highlight",
-                                style = MaterialTheme.typography.labelMedium,
+                                text = "Specular Frost Refraction",
+                                fontSize = 11.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
                                 text = "${(themeConfig.liquidGlassRefraction * 100).roundToInt()}%",
-                                style = MaterialTheme.typography.labelMedium,
+                                fontSize = 11.sp,
                                 fontFamily = FontFamily.Monospace,
                                 fontWeight = FontWeight.Bold,
                                 color = secondaryColor
@@ -557,6 +504,189 @@ fun ThemeStudioSection(
                                 activeTrackColor = secondaryColor
                             ),
                             modifier = Modifier.testTag("slider_liquid_glass_refraction")
+                        )
+                    }
+                }
+            }
+        }
+
+        // 1C. NOTIFICATION PANEL UI OPTIONS
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("notification_panel_ui_card"),
+            shape = cardShape,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = CardDefaults.outlinedCardBorder()
+        ) {
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.NotificationsActive,
+                            contentDescription = "Notification UI",
+                            tint = primaryColor,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text(
+                                text = "NOTIFICATION PANEL UI STYLE",
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                color = secondaryColor
+                            )
+                            Text(
+                                text = "Choose format & aesthetics for background telemetry notification HUD",
+                                fontSize = 10.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+
+                // 3 Options Selector
+                com.example.data.model.NotificationPanelStyle.entries.forEach { style ->
+                    val isSelected = themeConfig.notificationPanelStyle == style
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .border(
+                                width = if (isSelected) 1.5.dp else 1.dp,
+                                color = if (isSelected) primaryColor else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                            .clickable { repository.setNotificationPanelStyle(style) },
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isSelected) primaryColor.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    RadioButton(
+                                        selected = isSelected,
+                                        onClick = { repository.setNotificationPanelStyle(style) },
+                                        colors = RadioButtonDefaults.colors(selectedColor = primaryColor),
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = style.title,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (isSelected) primaryColor else MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                                Text(
+                                    text = style.description,
+                                    fontSize = 10.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(start = 28.dp, top = 2.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Interactive Live Notification Panel Preview
+                Text(
+                    text = "NOTIFICATION HUD LIVE PREVIEW",
+                    fontSize = 9.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    color = primaryColor
+                )
+
+                val activeStyle = themeConfig.notificationPanelStyle
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(if (activeStyle == com.example.data.model.NotificationPanelStyle.IOS_LIQUID_GLASS_COMPACT) 10.dp else 14.dp))
+                        .background(
+                            when (activeStyle) {
+                                com.example.data.model.NotificationPanelStyle.STOCK_SIMPLE -> androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f))
+                                com.example.data.model.NotificationPanelStyle.DYNAMIC_THEME_GLOW -> Brush.verticalGradient(
+                                    listOf(
+                                        primaryColor.copy(alpha = 0.22f),
+                                        secondaryColor.copy(alpha = 0.12f),
+                                        MaterialTheme.colorScheme.surface
+                                    )
+                                )
+                                com.example.data.model.NotificationPanelStyle.IOS_LIQUID_GLASS_COMPACT -> Brush.linearGradient(
+                                    listOf(
+                                        Color.White.copy(alpha = 0.16f),
+                                        Color(0xFF38BDF8).copy(alpha = 0.12f),
+                                        Color(0xFF0F2B44)
+                                    )
+                                )
+                            }
+                        )
+                        .border(
+                            width = 1.2.dp,
+                            color = when (activeStyle) {
+                                com.example.data.model.NotificationPanelStyle.STOCK_SIMPLE -> MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                                com.example.data.model.NotificationPanelStyle.DYNAMIC_THEME_GLOW -> primaryColor.copy(alpha = 0.65f)
+                                com.example.data.model.NotificationPanelStyle.IOS_LIQUID_GLASS_COMPACT -> Color(0xFFE0F7FA).copy(alpha = 0.65f)
+                            },
+                            shape = RoundedCornerShape(if (activeStyle == com.example.data.model.NotificationPanelStyle.IOS_LIQUID_GLASS_COMPACT) 10.dp else 14.dp)
+                        )
+                        .padding(if (activeStyle == com.example.data.model.NotificationPanelStyle.IOS_LIQUID_GLASS_COMPACT) 8.dp else 12.dp)
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = when (activeStyle) {
+                                    com.example.data.model.NotificationPanelStyle.STOCK_SIMPLE -> "Dragon Tools Telemetry"
+                                    com.example.data.model.NotificationPanelStyle.DYNAMIC_THEME_GLOW -> "⚡ DRAGON CHROMA HUD"
+                                    com.example.data.model.NotificationPanelStyle.IOS_LIQUID_GLASS_COMPACT -> "❄️ LIQUID GLASS COMPACT"
+                                },
+                                fontSize = if (activeStyle == com.example.data.model.NotificationPanelStyle.IOS_LIQUID_GLASS_COMPACT) 11.sp else 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = when (activeStyle) {
+                                    com.example.data.model.NotificationPanelStyle.STOCK_SIMPLE -> MaterialTheme.colorScheme.onSurface
+                                    com.example.data.model.NotificationPanelStyle.DYNAMIC_THEME_GLOW -> primaryColor
+                                    com.example.data.model.NotificationPanelStyle.IOS_LIQUID_GLASS_COMPACT -> Color.White
+                                }
+                            )
+                            Text(
+                                text = "NOW • ACTIVE",
+                                fontSize = 8.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Text(
+                            text = "78% • ⚡ +3420 mA (18.2 W) • 34°C",
+                            fontSize = if (activeStyle == com.example.data.model.NotificationPanelStyle.IOS_LIQUID_GLASS_COMPACT) 11.sp else 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Active: 8.2%/h • Screen On: 1h 22m • SOH: 98%",
+                            fontSize = if (activeStyle == com.example.data.model.NotificationPanelStyle.IOS_LIQUID_GLASS_COMPACT) 9.sp else 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }

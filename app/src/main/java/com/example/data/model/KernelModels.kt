@@ -1,5 +1,16 @@
 package com.example.data.model
 
+data class DeviceInfo(
+    val manufacturer: String = "Xiaomi",
+    val model: String = "POCO F6",
+    val deviceCode: String = "peridot",
+    val boardHardware: String = "SM8635",
+    val socName: String = "Snapdragon 8s Gen 3",
+    val gpuName: String = "Adreno 735",
+    val androidVersion: String = "Android 14",
+    val kernelVersion: String = "Linux 6.1"
+)
+
 data class CpuCluster(
     val id: Int,
     val name: String,
@@ -66,7 +77,7 @@ data class BatteryTelemetry(
     val chargeCycles: Int = 142,
     val dischargeRateMa: Int = 380,
     val dischargeRatePercentPerHour: Float = 7.6f,
-    val remainingCapacityMah: Int = 3900,
+    val remainingCapacityMah: Int = 3783,
     val learnedFullCapacityMah: Int = 4850,
     val designCapacityMah: Int = 5000,
     val healthPercent: Int = 97,
@@ -91,7 +102,13 @@ data class BatteryTelemetry(
     val health: String = "Good (97% SOH • 4850/5000 mAh)",
     val healthAndCycleSource: String = "Android BatteryManager + PowerProfile",
     val isRootBatteryHealthGranted: Boolean = false
-)
+) {
+    val activeDrainPercentInfo: String
+        get() = String.format(java.util.Locale.US, "%.1f%% (%.1f%%/h)", screenOnDrainPercent, activeDrainPerHour)
+
+    val idleDrainPercentInfo: String
+        get() = String.format(java.util.Locale.US, "%.1f%% (%.1f%%/h)", screenOffDrainPercent, idleDrainPerHour)
+}
 
 data class FreshStartTelemetryConfig(
     val autoFreshStartOnUnplug: Boolean = true,
@@ -105,50 +122,190 @@ enum class BatteryProfile(
     val title: String,
     val description: String,
     val thermalLimitC: Float,
+    val socThermalLimitC: Float = 85.0f,
+    val gpuThermalLimitC: Float = 82.0f,
+    val minCpuFreqSilverKhz: Int = 614400,
+    val maxCpuFreqSilverKhz: Int,
+    val minCpuFreqGoldKhz: Int = 748800,
+    val maxCpuFreqGoldKhz: Int,
+    val minCpuFreqPrimeKhz: Int = 844800,
     val maxCpuFreqPrimeKhz: Int,
-    val maxGpuFreqMhz: Int
+    val minGpuFreqMhz: Int = 250,
+    val maxGpuFreqMhz: Int,
+    val isUncapped: Boolean = false,
+    val cpuBoostEnabled: Boolean = true,
+    val inputBoostEnabled: Boolean = true,
+    val cpuBoostSilverKhz: Int = 1651200,
+    val cpuBoostGoldKhz: Int = 2150400,
+    val cpuBoostPrimeKhz: Int = 2496000,
+    val cpuBoostDurationMs: Int = 80,
+    val cpuBoostGpuThreshold: Int = 50,
+    val gpuBoostEnabled: Boolean = true,
+    val gpuBoostLevel: String = "DYNAMIC",
+    val adrenoBoostVal: Int = 1,
+    val gpuPowerLevel: Int = 0
 ) {
     DEFAULT(
-        title = "Default (ROM Stock)",
-        description = "Unmodified ROM stock kernel profile with factory schedutil governor and stock clock/thermal policies",
-        thermalLimitC = 42.0f,
+        title = "ROM's Default",
+        description = "Hands 100% full CPU/GPU & thermal control to the ROM's inbuilt battery profiler and native thermal engine",
+        thermalLimitC = 0.0f,
+        socThermalLimitC = 0.0f,
+        gpuThermalLimitC = 0.0f,
+        minCpuFreqSilverKhz = 614400,
+        maxCpuFreqSilverKhz = 2016000,
+        minCpuFreqGoldKhz = 748800,
+        maxCpuFreqGoldKhz = 2800000,
+        minCpuFreqPrimeKhz = 844800,
         maxCpuFreqPrimeKhz = 3014400,
-        maxGpuFreqMhz = 950
+        minGpuFreqMhz = 250,
+        maxGpuFreqMhz = 950,
+        isUncapped = false,
+        cpuBoostEnabled = true,
+        inputBoostEnabled = true,
+        cpuBoostSilverKhz = 1651200,
+        cpuBoostGoldKhz = 2150400,
+        cpuBoostPrimeKhz = 2496000,
+        cpuBoostDurationMs = 80,
+        cpuBoostGpuThreshold = 50,
+        gpuBoostEnabled = false,
+        gpuBoostLevel = "LOW",
+        adrenoBoostVal = 0,
+        gpuPowerLevel = 0
     ),
     AUTO(
         title = "Auto Smart",
-        description = "Intelligently balances power & thermals based on active foreground workload",
+        description = "Intelligently balances POCO F6 power & thermals based on active foreground workload",
         thermalLimitC = 41.0f,
-        maxCpuFreqPrimeKhz = 2800000,
-        maxGpuFreqMhz = 900
+        socThermalLimitC = 78.0f,
+        gpuThermalLimitC = 75.0f,
+        minCpuFreqSilverKhz = 614400,
+        maxCpuFreqSilverKhz = 2016000,
+        minCpuFreqGoldKhz = 960000,
+        maxCpuFreqGoldKhz = 2496000,
+        minCpuFreqPrimeKhz = 960000,
+        maxCpuFreqPrimeKhz = 2803200,
+        minGpuFreqMhz = 250,
+        maxGpuFreqMhz = 900,
+        isUncapped = false,
+        cpuBoostEnabled = true,
+        inputBoostEnabled = true,
+        cpuBoostSilverKhz = 1651200,
+        cpuBoostGoldKhz = 2150400,
+        cpuBoostPrimeKhz = 2496000,
+        cpuBoostDurationMs = 85,
+        cpuBoostGpuThreshold = 45,
+        gpuBoostEnabled = true,
+        gpuBoostLevel = "DYNAMIC",
+        adrenoBoostVal = 1,
+        gpuPowerLevel = 1
     ),
     GAMING(
         title = "Dragon Gaming",
-        description = "Unleashes Adreno 735 to 1100 MHz, locks Prime Cortex-X4, high thermal threshold",
-        thermalLimitC = 47.0f, // 47 in Dragon Gaming profile
+        description = "POCO F6 SM8635 Throttleless Max Performance: Dynamic scaling up to 3014/2800/2016 MHz CPU & 1100 MHz GPU, every thermal limit removed, zero thermal throttling, ROM & kernel thermal throttles completely bypassed",
+        thermalLimitC = 0.0f,
+        socThermalLimitC = 0.0f,
+        gpuThermalLimitC = 0.0f,
+        minCpuFreqSilverKhz = 1228800,
+        maxCpuFreqSilverKhz = 2016000,
+        minCpuFreqGoldKhz = 1555200,
+        maxCpuFreqGoldKhz = 2800000,
+        minCpuFreqPrimeKhz = 1728000,
         maxCpuFreqPrimeKhz = 3014400,
-        maxGpuFreqMhz = 1100
+        minGpuFreqMhz = 400,
+        maxGpuFreqMhz = 1100,
+        isUncapped = true,
+        cpuBoostEnabled = true,
+        inputBoostEnabled = true,
+        cpuBoostSilverKhz = 1651200,
+        cpuBoostGoldKhz = 2496000,
+        cpuBoostPrimeKhz = 3014400,
+        cpuBoostDurationMs = 120,
+        cpuBoostGpuThreshold = 30,
+        gpuBoostEnabled = true,
+        gpuBoostLevel = "AGGRESSIVE",
+        adrenoBoostVal = 3,
+        gpuPowerLevel = 0
     ),
     PERFORMANCE(
         title = "Peak Performance",
-        description = "Maximum burst clock speeds for app launching and intensive multitasking",
-        thermalLimitC = 43.0f, // 43 in Peak Performance profile
-        maxCpuFreqPrimeKhz = 3014400,
-        maxGpuFreqMhz = 1000
+        description = "POCO F6 Exact Prime 2803 MHz, Gold 2496 MHz, Silver 2016 MHz, GPU 900 MHz, rock-solid stable sweet spot, 43°C limit (SoC 80°C, GPU 78°C)",
+        thermalLimitC = 43.0f,
+        socThermalLimitC = 80.0f,
+        gpuThermalLimitC = 78.0f,
+        minCpuFreqSilverKhz = 1228800,
+        maxCpuFreqSilverKhz = 2016000,
+        minCpuFreqGoldKhz = 1401600,
+        maxCpuFreqGoldKhz = 2496000,
+        minCpuFreqPrimeKhz = 1516800,
+        maxCpuFreqPrimeKhz = 2803200,
+        minGpuFreqMhz = 350,
+        maxGpuFreqMhz = 900,
+        isUncapped = false,
+        cpuBoostEnabled = true,
+        inputBoostEnabled = true,
+        cpuBoostSilverKhz = 1497600,
+        cpuBoostGoldKhz = 2150400,
+        cpuBoostPrimeKhz = 2803200,
+        cpuBoostDurationMs = 90,
+        cpuBoostGpuThreshold = 40,
+        gpuBoostEnabled = true,
+        gpuBoostLevel = "DYNAMIC",
+        adrenoBoostVal = 2,
+        gpuPowerLevel = 1
     ),
     BALANCED(
         title = "Balanced Daily",
-        description = "Optimal everyday power curve with smooth 120Hz display and gentle cooling",
-        thermalLimitC = 40.0f, // 40 in Balanced Daily profile
-        maxCpuFreqPrimeKhz = 2400000,
-        maxGpuFreqMhz = 750
+        description = "Prime 2496 MHz, Gold 2150 MHz, Silver 2016 MHz, GPU 750 MHz, smooth 120Hz daily boost, 40°C limit (SoC 75°C, GPU 72°C)",
+        thermalLimitC = 40.0f,
+        socThermalLimitC = 75.0f,
+        gpuThermalLimitC = 72.0f,
+        minCpuFreqSilverKhz = 960000,
+        maxCpuFreqSilverKhz = 2016000,
+        minCpuFreqGoldKhz = 1152000,
+        maxCpuFreqGoldKhz = 2150400,
+        minCpuFreqPrimeKhz = 1267200,
+        maxCpuFreqPrimeKhz = 2496000,
+        minGpuFreqMhz = 250,
+        maxGpuFreqMhz = 750,
+        isUncapped = false,
+        cpuBoostEnabled = true,
+        inputBoostEnabled = true,
+        cpuBoostSilverKhz = 1228800,
+        cpuBoostGoldKhz = 1785600,
+        cpuBoostPrimeKhz = 2188800,
+        cpuBoostDurationMs = 50,
+        cpuBoostGpuThreshold = 55,
+        gpuBoostEnabled = true,
+        gpuBoostLevel = "DYNAMIC",
+        adrenoBoostVal = 1,
+        gpuPowerLevel = 2
     ),
     POWER_SAVING(
         title = "Extreme Battery Saver",
-        description = "Underclocks CPU clusters, caps GPU at 450 MHz, throttles background drain",
+        description = "Prime 1728 MHz, Gold 1958 MHz, Silver 1843 MHz, GPU 600 MHz, boosts off, 38°C limit (SoC 68°C, GPU 65°C)",
         thermalLimitC = 38.0f,
-        maxCpuFreqPrimeKhz = 1800000,
-        maxGpuFreqMhz = 450
+        socThermalLimitC = 68.0f,
+        gpuThermalLimitC = 65.0f,
+        minCpuFreqSilverKhz = 614400,
+        maxCpuFreqSilverKhz = 1843200,
+        minCpuFreqGoldKhz = 748800,
+        maxCpuFreqGoldKhz = 1958400,
+        minCpuFreqPrimeKhz = 844800,
+        maxCpuFreqPrimeKhz = 1728000,
+        minGpuFreqMhz = 250,
+        maxGpuFreqMhz = 600,
+        isUncapped = false,
+        cpuBoostEnabled = false,
+        inputBoostEnabled = false,
+        cpuBoostSilverKhz = 1228800,
+        cpuBoostGoldKhz = 1555200,
+        cpuBoostPrimeKhz = 1267200,
+        cpuBoostDurationMs = 0,
+        cpuBoostGpuThreshold = 85,
+        gpuBoostEnabled = false,
+        gpuBoostLevel = "LOW",
+        adrenoBoostVal = 0,
+        gpuPowerLevel = 3
     )
 }
 
@@ -157,6 +314,8 @@ data class CustomBatteryProfile(
     val title: String,
     val description: String,
     val thermalLimitC: Float,
+    val socThermalLimitC: Float = 85.0f,
+    val gpuThermalLimitC: Float = 82.0f,
     // Granular CPU cluster lowest and highest clock speeds
     val silverMinFreqKhz: Int = 614400,
     val silverMaxFreqKhz: Int = 2016000,
@@ -170,32 +329,63 @@ data class CustomBatteryProfile(
     val governor: String = "schedutil"
 )
 
-enum class ChargingSpeedMode(val label: String, val maxWattage: Int, val maxCurrentMa: Int) {
-    STANDARD_18W("Standard 18W", 18, 2000),
-    FAST_33W("Fast 33W", 33, 3600),
-    TURBO_67W("Turbo 67W", 67, 7200),
-    HYPERCHARGE_90W("HyperCharge 90W", 90, 20000)
+enum class ChargingSpeedMode(
+    val label: String,
+    val shortLabel: String,
+    val maxWattage: Int,
+    val maxCurrentMa: Int,
+    val description: String
+) {
+    STANDARD_18W(
+        label = "Standard 18W",
+        shortLabel = "18W",
+        maxWattage = 18,
+        maxCurrentMa = 4000,
+        description = "18W USB-PD / QC3.0 • Cool & gentle daily charging (4,000 mA max ceiling)"
+    ),
+    FAST_33W(
+        label = "Fast 33W",
+        shortLabel = "33W",
+        maxWattage = 33,
+        maxCurrentMa = 7500,
+        description = "33W Fast Charge • Balanced speed & low thermal stress (7,500 mA max ceiling)"
+    ),
+    TURBO_67W(
+        label = "Turbo 67W",
+        shortLabel = "67W",
+        maxWattage = 67,
+        maxCurrentMa = 15000,
+        description = "67W Sonic Turbo • Dual charge-pump high speed (15,000 mA max ceiling)"
+    ),
+    HYPERCHARGE_90W(
+        label = "HyperCharge 90W",
+        shortLabel = "90W",
+        maxWattage = 90,
+        maxCurrentMa = 20000,
+        description = "90W Max HyperCharge • Uncapped peak PMIC output (20,000 mA max ceiling)"
+    )
 }
 
 enum class NightChargingScheduleMode(val label: String, val description: String) {
+    ALWAYS_ACTIVE("Always Active", "Enforces Night Trickle & Target % Cap immediately whenever enabled"),
     SCHEDULED("Scheduled Hours", "Activates automatically during custom user-set night hours"),
-    SMART_ALARM("Smart Morning Alarm", "Syncs with system alarm to calculate wake-up time")
+    SMART_ALARM("Smart Alarm", "Syncs with system morning alarm & tops up 45m before wake-up")
 }
 
 data class NightChargingConfig(
     val isEnabled: Boolean = false,
-    val scheduleMode: NightChargingScheduleMode = NightChargingScheduleMode.SCHEDULED,
+    val scheduleMode: NightChargingScheduleMode = NightChargingScheduleMode.ALWAYS_ACTIVE,
     val startHour: Int = 22, // 10:00 PM
     val startMinute: Int = 0,
     val endHour: Int = 7,    // 07:00 AM
     val endMinute: Int = 0,
-    val targetLimitPercent: Int = 80, // 70% to 90% (Holds charge overnight)
+    val targetLimitPercent: Int = 80, // 70% to 95% (Holds charge overnight)
     val finishTopUpBeforeWakeup: Boolean = true, // Slowly top-up to 100% 45m before alarm/wake-up
     val autoBypassAtTarget: Boolean = true, // Auto switch to USB Direct Motherboard Bypass once target % reached
-    val trickleCurrentMa: Int = 1000, // 500mA - 2000mA (whisper cold slow charging)
-    val maxThermalCeilingC: Float = 34.0f, // Safety thermal ceiling during sleep; pauses if exceeded
+    val trickleCurrentMa: Int = 1000, // 500mA - 2500mA (whisper cold slow charging)
+    val maxThermalCeilingC: Float = 36.0f, // Safety thermal ceiling during sleep; pauses if exceeded
     val muteChargingLed: Boolean = true, // Turn off charging LED and status lights at night
-    val isSimulationForced: Boolean = false, // Allows user to test/demo night mode immediately
+    val isSimulationForced: Boolean = false, // Allows user to force active outside scheduled window
     val isCurrentlyActive: Boolean = false,
     val statusDetail: String = "Inactive (Standby for night schedule)"
 )
@@ -226,22 +416,22 @@ data class ChargingControls(
     val speedMode: ChargingSpeedMode = ChargingSpeedMode.HYPERCHARGE_90W,
     val bypassCharging: Boolean = false, // Powers device directly, stops battery charge
     val manualCurrentLimiterEnabled: Boolean = false,
-    val manualCurrentLimitMa: Int = 20000, // 1100mA (5W) - 20000mA (90W)
-    val customTempLimitEnabled: Boolean = true, // Custom temperature limit for Custom Current Limiter
-    val customTempLimitC: Float = 40.0f, // 32.0°C - 48.0°C configurable ceiling
+    val manualCurrentLimitMa: Int = 20000, // 1000mA (4.5W) - 20000mA (90W)
+    val customTempLimitEnabled: Boolean = false, // Optional thermal step-down guard; off by default so limiter works up to full selected max limit
+    val customTempLimitC: Float = 44.0f, // 32.0°C - 48.0°C configurable ceiling
     val customTempThermalMode: CurrentLimiterThermalMode = CurrentLimiterThermalMode.SMART_STEP_DOWN,
-    val customTempFallbackCurrentMa: Int = 2200, // Fallback mA when temperature limit is reached (1100mA - 10000mA)
+    val customTempFallbackCurrentMa: Int = 5000, // Fallback mA when temperature limit is reached (1000mA - 18000mA)
     val customTempCooldownDeltaC: Float = 2.0f, // Cooldown hysteresis delta (1.0°C - 4.0°C) before restoring full current
     val isCustomTempThrottlingActive: Boolean = false,
     val effectiveEnforcedCurrentMa: Int = 20000,
-    val customTempStatusText: String = "Armed • Monitoring AOSP battery temp (Limit: 40.0°C • Resume: 38.0°C)",
+    val customTempStatusText: String = "Disabled • Full selected current ceiling active up to max limit",
     val bypassThermalLimit: Boolean = false, // Ignores thermal step-down to sustain 90W
     val nightCharging: NightChargingConfig = NightChargingConfig(),
     val romDefaultOverridden: Boolean = false,
     val lockSysfsNodesReadOnly: Boolean = true, // Locks constant_charge_current_max (chmod 0444) so ROM cannot reset it
     val overrideRomThermalDaemon: Boolean = true, // Overrides mi_thermald / system_temp_level
     val forcePmicVoterOverride: Boolean = true, // Forces Qualcomm PMIC FCC & USB_ICL hardware votables
-    val activeOverrideStatus: String = "Standby • ROM Default Charging Active",
+    val activeOverrideStatus: String = "Active Preset: HyperCharge 90W (20,000 mA / 90W Max)",
     val lastRootOverrideCommand: String = "/sys/class/power_supply/battery/constant_charge_current_max",
     val thermalBypassStatus: String = "Standby • ROM Default Thermal Throttling Active",
     val lastThermalBypassCommand: String = "/sys/class/power_supply/battery/system_temp_level & cooling_deviceX/cur_state"
@@ -471,9 +661,98 @@ data class DexOptConfig(
 )
 
 data class ThermalWarningConfig(
-    val enabled: Boolean = true,
+    val enabled: Boolean = false,
     val criticalThresholdC: Float = 46.0f,
     val hasTriggeredAlert: Boolean = false
+)
+
+enum class ThermalThrottlingPolicy(
+    val label: String,
+    val shortTitle: String,
+    val description: String,
+    val triggerOffsetDeciC: Int,
+    val stage1DropPct: Int,
+    val stage2DropPct: Int,
+    val stage3DropPct: Int
+) {
+    PROGRESSIVE_OPP_STEP(
+        label = "Progressive OPP Step-Down",
+        shortTitle = "Progressive",
+        description = "Smooth 3-stage POCO F6 hardware OPP step-down (-10% at limit, -20% at +1°C, -32% at +2.5°C) for zero-stutter FPS stability.",
+        triggerOffsetDeciC = 0,
+        stage1DropPct = 10,
+        stage2DropPct = 20,
+        stage3DropPct = 32
+    ),
+    AGGRESSIVE_HOLD(
+        label = "Aggressive Performance Hold",
+        shortTitle = "Aggressive Hold",
+        description = "Holds 100% profile clocks up to Limit + 0.5°C, then applies a minimal -8% OPP step-down to maximize sustained gaming FPS.",
+        triggerOffsetDeciC = 5,
+        stage1DropPct = 8,
+        stage2DropPct = 16,
+        stage3DropPct = 28
+    ),
+    STRICT_CEILING_CLAMP(
+        label = "Strict Ceiling Clamp",
+        shortTitle = "Strict Clamp",
+        description = "Immediately clamps CPU & GPU clocks by -18% as soon as temperature reaches the target limit and holds until cooled.",
+        triggerOffsetDeciC = 0,
+        stage1DropPct = 18,
+        stage2DropPct = 28,
+        stage3DropPct = 40
+    ),
+    COOL_CONSERVATIVE(
+        label = "Cool & Conservative",
+        shortTitle = "Cool First",
+        description = "Pre-emptively steps down clocks by -12% at Limit - 0.5°C to keep chassis and battery cool during extended sessions.",
+        triggerOffsetDeciC = -5,
+        stage1DropPct = 12,
+        stage2DropPct = 24,
+        stage3DropPct = 36
+    );
+    val title: String get() = label
+}
+
+enum class ThermalSensorSource(
+    val label: String,
+    val shortTitle: String,
+    val description: String
+) {
+    BATTERY_SENSOR(
+        label = "Battery Temperature Sensor (/sys/class/power_supply/battery/temp)",
+        shortTitle = "Battery Temp",
+        description = "Tracks hardware battery/chassis temperature directly against the 38°C–45°C profile limit."
+    ),
+    SMART_DUAL_SENSOR(
+        label = "Smart Dual Sensor (Battery Temp + SoC CPU/GPU Peak Guard)",
+        shortTitle = "Dual Batt + SoC",
+        description = "Tracks battery temp against the profile limit AND guards Snapdragon 8s Gen 3 SoC junction temp (88°C+)."
+    );
+    val title: String get() = shortTitle
+}
+
+data class ThermalControlConfig(
+    val syncWithBatteryProfiler: Boolean = true,
+    val customThermalLimitC: Float = 43.0f,
+    val activeEffectiveLimitC: Float = 42.0f,
+    val policy: ThermalThrottlingPolicy = ThermalThrottlingPolicy.PROGRESSIVE_OPP_STEP,
+    val sensorSource: ThermalSensorSource = ThermalSensorSource.BATTERY_SENSOR,
+    val cooldownHysteresisC: Float = 1.5f,
+    val controlCpuFreqQos: Boolean = true,
+    val controlGpuPwrLevel: Boolean = true,
+    val suppressPrematureRomThrottle: Boolean = true,
+    val isRomDefaultPassthrough: Boolean = true,
+    val currentThrottleStage: Int = 0, // 0 = Unthrottled, 1 = Stage 1 (-1 OPP), 2 = Stage 2 (-2 OPPs), 3 = Stage 3 (Cooldown Guard)
+    val currentThrottleStatus: String = "ROM Native Thermal Control Active (Free from App Control)",
+    val enforcedPrimeMaxKhz: Int = 3014400,
+    val enforcedGoldMaxKhz: Int = 2800000,
+    val enforcedSilverMaxKhz: Int = 2016000,
+    val enforcedGpuMaxMhz: Int = 950,
+    val activeEffectiveSocLimitC: Float = 85.0f,
+    val activeEffectiveGpuLimitC: Float = 82.0f,
+    val liveSocTempC: Float = 41.0f,
+    val liveGpuTempC: Float = 38.0f
 )
 
 data class AppManagerItem(
@@ -624,10 +903,29 @@ data class CustomColorPalette(
     val borderGlowIntensity: Float = 0.75f
 )
 
+enum class NotificationPanelStyle(
+    val title: String,
+    val description: String
+) {
+    STOCK_SIMPLE(
+        title = "Stock Default (Simple)",
+        description = "Clean, minimal stock Android notification formatting with default system colors."
+    ),
+    DYNAMIC_THEME_GLOW(
+        title = "App's Theme Color (Dynamic Glow)",
+        description = "Beautiful notification panel UI styled dynamically with app's active primary theme colors & glowing badges."
+    ),
+    IOS_LIQUID_GLASS_COMPACT(
+        title = "iOS Liquid Glass (Compact)",
+        description = "Compact translucent liquid glass HUD with sleek frost borders, smaller footprint & dense metrics."
+    )
+}
+
 data class ThemeCustomizationConfig(
     val primaryAccentIndex: Int = 0,
     val secondaryAccentIndex: Int = 1,
     val surfaceMode: SurfaceThemeMode = SurfaceThemeMode.OBSIDIAN_CARBON,
+    val notificationPanelStyle: NotificationPanelStyle = NotificationPanelStyle.STOCK_SIMPLE,
     val useCustomPrimaryColor: Boolean = false,
     val customRed: Int = 255,
     val customGreen: Int = 42,
@@ -677,5 +975,273 @@ data class ThemeCustomizationConfig(
         )
     )
 )
+
+// ============================================================================
+// FRAME GENERATION (FRAMEGEN) ENGINE MODELS
+// ============================================================================
+
+enum class FrameGenMode(
+    val label: String,
+    val multiplier: Int,
+    val description: String
+) {
+    MODE_2X(
+        label = "2X",
+        multiplier = 2,
+        description = "Synthesizes 1 motion-compensated intermediate frame (t=0.50) between every rendered frame pair"
+    ),
+    MODE_3X(
+        label = "3X",
+        multiplier = 3,
+        description = "Synthesizes 2 motion-compensated frames (t=0.33, t=0.67) • Requires >=120Hz display & Vulkan 1.1+ / GLES 3.2 compute"
+    )
+}
+
+enum class MotionEstimationQuality(
+    val label: String,
+    val blockSizePx: Int,
+    val searchRadiusPx: Int,
+    val subPixelAccuracy: Boolean,
+    val description: String
+) {
+    LOW(
+        label = "Low",
+        blockSizePx = 16,
+        searchRadiusPx = 8,
+        subPixelAccuracy = false,
+        description = "Fast 16x16 macroblock Diamond Search • Minimal GPU overhead & ultra-low latency (~1.1 ms)"
+    ),
+    BALANCED(
+        label = "Balanced",
+        blockSizePx = 8,
+        searchRadiusPx = 12,
+        subPixelAccuracy = true,
+        description = "8x8 sub-pixel bidirectional optical flow + occlusion blending • Recommended for 60 -> 120 FPS"
+    ),
+    HIGH(
+        label = "High",
+        blockSizePx = 4,
+        searchRadiusPx = 16,
+        subPixelAccuracy = true,
+        description = "Fine-grain 4x4 dense optical flow + edge-preserving temporal synthesis • Highest motion clarity"
+    )
+}
+
+enum class GpuFrameGenBackend(
+    val title: String,
+    val vendor: String,
+    val description: String
+) {
+    QUALCOMM_ADRENO_OPTICAL_FLOW(
+        title = "Qualcomm Adreno AFME / QTI Optical Flow",
+        vendor = "Qualcomm Technologies",
+        description = "Adreno Frame Motion Engine & Vulkan/GLES 3.2 Sub-Pixel Optical Flow Backend"
+    ),
+    ARM_MALI_VALHALL_COMPUTE(
+        title = "ARM Mali / Immortalis Compute Optical Flow",
+        vendor = "ARM Ltd.",
+        description = "Valhall / 5th-Gen Shader Core Async Compute Motion Estimation Backend"
+    ),
+    SAMSUNG_XCLIPSE_RDNA(
+        title = "Samsung Xclipse RDNA Wave32 Optical Flow",
+        vendor = "Samsung / AMD",
+        description = "Xclipse RDNA Compute Shader Motion Vector & Temporal Interpolation Backend"
+    ),
+    UNIVERSAL_GLES32_VULKAN_COMPUTE(
+        title = "Universal Vulkan 1.1+ / GLES 3.2 Compute Engine",
+        vendor = "Khronos Standard",
+        description = "Cross-Vendor Compute Shader Diamond Search Block-Matching & Temporal Warp"
+    ),
+    FALLBACK_CPU_NEON_SIMD(
+        title = "ARMv8 NEON SIMD Software Fallback",
+        vendor = "CPU Fallback",
+        description = "GPU lacks Compute Shader support; restricted to lightweight 2X block interpolation"
+    )
+}
+
+enum class GameEngineType(
+    val label: String,
+    val nativeSignature: String,
+    val compatibilityNotes: String
+) {
+    UNITY(
+        label = "Unity Engine",
+        nativeSignature = "libunity.so / libil2cpp.so",
+        compatibilityNotes = "Supports Android Frame Pacing (Swappy), ADPF hints, and URP/HDRP motion vector pipelines."
+    ),
+    UNREAL_ENGINE(
+        label = "Unreal Engine 4 / 5",
+        nativeSignature = "libUE4.so / libUnreal.so",
+        compatibilityNotes = "Supports Vulkan Mobile Deferred/Forward rendering, temporal upscaling, and frame pacing synchronization."
+    ),
+    CUSTOM_NATIVE_VULKAN_GLES(
+        label = "Custom Native Engine (Vulkan / GLES)",
+        nativeSignature = "Native C++ / NDK Shared Libraries",
+        compatibilityNotes = "Supports SurfaceFlinger choreography, ADPF thermal/FPS pacing, and driver-level optical flow."
+    ),
+    SYSTEM_OR_NON_GAME(
+        label = "Standard App / System UI",
+        nativeSignature = "Android HWUI / Skia RenderThread",
+        compatibilityNotes = "Non-game workload. Automatic FrameGen remains in standby until a supported game enters foreground."
+    )
+}
+
+data class DetectedGameCompatibility(
+    val packageName: String,
+    val appName: String,
+    val engineType: GameEngineType,
+    val graphicsApi: String,
+    val isCompatible: Boolean,
+    val requiresEngineSdkForDepthVectors: Boolean,
+    val statusDetail: String,
+    val isAddedToFrameGen: Boolean = false
+)
+
+data class FrameGenHardwareCapabilities(
+    val androidVersion: String = "Android 14 (API 34)",
+    val sdkInt: Int = 34,
+    val gpuRenderer: String = "Adreno (TM) 735",
+    val gpuVendor: String = "Qualcomm",
+    val gpuDriverVersion: String = "OpenGL ES 3.2 V@0746.0",
+    val socModel: String = "SM8635 (Snapdragon 8s Gen 3)",
+    val cpuArchitecture: String = "arm64-v8a (8 Cores)",
+    val cpuCoreCount: Int = 8,
+    val currentRefreshRateHz: Int = 120,
+    val peakRefreshRateHz: Int = 120,
+    val supportedRefreshRatesHz: List<Int> = listOf(60, 90, 120),
+    val displayResolution: String = "1220 x 2712",
+    val totalRamMb: Int = 12288,
+    val availableRamMb: Int = 6144,
+    val vulkanSupported: Boolean = true,
+    val vulkanVersionText: String = "Vulkan 1.3",
+    val vulkanHardwareLevel: Int = 1,
+    val vulkanComputeSupported: Boolean = true,
+    val glesVersionText: String = "OpenGL ES 3.2",
+    val glesComputeShadersSupported: Boolean = true,
+    val hasDedicatedDisplayMemcChip: Boolean = false,
+    val displayMemcChipName: String = "None (GPU Compute Optical Flow Active)",
+    val detectedBackend: GpuFrameGenBackend = GpuFrameGenBackend.QUALCOMM_ADRENO_OPTICAL_FLOW,
+    val isFrameGenSupported: Boolean = true,
+    val is2xSupported: Boolean = true,
+    val is3xSupported: Boolean = true,
+    val unsupported3xReason: String = "",
+    val compatibilityVerdict: String = "Hardware Compatible • 2X & 3X Optical Flow Supported",
+    val pipelineArchitectureDisclosures: List<String> = listOf(
+        "Android's SurfaceFlinger security sandbox isolates protected game BufferQueues to prevent unauthorized memory scraping and anti-cheat violations.",
+        "Dragon FrameGen never modifies game APKs/OBBs, never injects ptrace hooks, and never bypasses kernel/user-space anti-cheat systems.",
+        "Per-Game Foreground Activation: FrameGen tracks the active foreground package in real time and activates exclusively when a user-added game is running in the foreground (never system-wide)."
+    )
+)
+
+enum class FrameGenFloatingStyle(
+    val label: String,
+    val badgeTag: String,
+    val description: String
+) {
+    TACTICAL_HUD_CARD(
+        label = "Tactical HUD Card",
+        badgeTag = "HUD CARD",
+        description = "3-row tactical telemetry card with mode badge, NAT + GEN → TOTAL FPS, and latency/temp footer"
+    ),
+    COMPACT_PILL_BAR(
+        label = "Compact Pill Bar",
+        badgeTag = "PILL BAR",
+        description = "Sleek single-line horizontal capsule bar: [FG 2X] 60+60 → 120 FPS • 40°C"
+    ),
+    MINIMAL_FPS_BADGE(
+        label = "Minimal FPS Badge",
+        badgeTag = "MINIMAL",
+        description = "Ultra-clean micro badge showing only total FPS & generated gain for zero clutter"
+    ),
+    LIQUID_GLASS_POD(
+        label = "Liquid Glass Pod",
+        badgeTag = "LIQUID GLASS",
+        description = "Translucent frosted cyan-ice glass pod with specular border & dual-row telemetry"
+    ),
+    VERTICAL_SIDE_DOCK(
+        label = "Vertical Edge Stack",
+        badgeTag = "EDGE STACK",
+        description = "Compact vertical stacked column designed for left/right screen edges in landscape"
+    )
+}
+
+enum class FrameGenFloatingSize(
+    val label: String,
+    val shortLabel: String,
+    val scaleFactor: Float,
+    val description: String
+) {
+    NANO(
+        label = "Nano",
+        shortLabel = "75%",
+        scaleFactor = 0.75f,
+        description = "Ultra-tiny footprint (75% scale)"
+    ),
+    SMALL(
+        label = "Small",
+        shortLabel = "88%",
+        scaleFactor = 0.88f,
+        description = "Compact low-profile size (88% scale)"
+    ),
+    MEDIUM(
+        label = "Medium",
+        shortLabel = "100%",
+        scaleFactor = 1.00f,
+        description = "Default balanced HUD size (100% scale)"
+    ),
+    LARGE(
+        label = "Large",
+        shortLabel = "118%",
+        scaleFactor = 1.18f,
+        description = "Enhanced readability size (118% scale)"
+    ),
+    XLARGE(
+        label = "Extra Large",
+        shortLabel = "135%",
+        scaleFactor = 1.35f,
+        description = "High-visibility large HUD (135% scale)"
+    )
+}
+
+data class FrameGenConfig(
+    val isEnabled: Boolean = false,
+    val mode: FrameGenMode = FrameGenMode.MODE_2X,
+    val quality: MotionEstimationQuality = MotionEstimationQuality.BALANCED,
+    val intensity: Float = 0.80f, // 0.10f .. 1.00f
+    val targetFps: Int = 120, // 60, 90, 120, 144
+    val autoGpuCompatibilityDetection: Boolean = true,
+    val autoActivateForGames: Boolean = true,
+    val autoShowFloatingWindow: Boolean = true,
+    val floatingStyle: FrameGenFloatingStyle = FrameGenFloatingStyle.TACTICAL_HUD_CARD,
+    val floatingSize: FrameGenFloatingSize = FrameGenFloatingSize.MEDIUM,
+    val floatingWindowPreviewActive: Boolean = false,
+    val showMotionVectorsInVisualizer: Boolean = true,
+    val addedGamePackages: Set<String> = emptySet()
+)
+
+data class FrameGenTelemetry(
+    val isActive: Boolean = false,
+    val isForegroundAddedGame: Boolean = false,
+    val nativeFps: Int = 60,
+    val generatedFps: Int = 0,
+    val totalPresentedFps: Int = 60,
+    val frameGenLatencyMs: Float = 0.0f,
+    val framePacingStabilityPercent: Float = 98.4f,
+    val gpuUtilizationPercent: Int = 32,
+    val cpuUtilizationPercent: Int = 26,
+    val gpuTempC: Float = 38.2f,
+    val frameGenOverheadPercent: Float = 0.0f,
+    val effectiveQuality: MotionEstimationQuality = MotionEstimationQuality.BALANCED,
+    val isPausedByGuardrail: Boolean = false,
+    val guardrailStatus: String = "Standby • FrameGen is OFF",
+    val motionConfidencePercent: Float = 95.4f,
+    val occlusionSuppressionPercent: Float = 98.1f,
+    val activeForegroundPackage: String = "",
+    val activeForegroundTitle: String = "Dragon Tools",
+    val activeGameEngine: GameEngineType = GameEngineType.SYSTEM_OR_NON_GAME,
+    val activeGraphicsApi: String = "Vulkan 1.3 / OpenGL ES 3.2",
+    val activeDeliveryMode: String = "Standby (Per-Game Foreground Mode)"
+)
+
 
 

@@ -45,10 +45,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
-import com.example.data.model.BatteryProfile
 import com.example.data.repository.KernelRepository
 import com.example.service.DragonMonitorService
-import com.example.ui.components.ProfileSelectionDialog
 import com.example.ui.screens.*
 import com.example.ui.theme.DangerRed
 import com.example.ui.theme.DragonKernelTheme
@@ -60,14 +58,11 @@ import java.util.Locale
 class MainActivity : ComponentActivity() {
 
     private val repository by lazy { KernelRepository.getInstance(applicationContext) }
-    private var openProfileDialogOnLaunch = mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         ensureUnrestrictedHighRefreshRateWindow()
-
-        handleIntent(intent)
 
         setContent {
             val accentIndex by repository.accentColorIndexFlow.collectAsState()
@@ -105,9 +100,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 DragonKernelMainScreen(
-                    repository = repository,
-                    showProfileDialogInitial = openProfileDialogOnLaunch.value,
-                    onResetProfileDialogFlag = { openProfileDialogOnLaunch.value = false }
+                    repository = repository
                 )
             }
         }
@@ -115,51 +108,41 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        repository.onMainActivityVisibilityChanged(true)
         try {
             DragonMonitorService.startService(applicationContext)
         } catch (_: Exception) {}
     }
 
+    override fun onPause() {
+        super.onPause()
+        repository.onMainActivityVisibilityChanged(false)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        repository.onMainActivityVisibilityChanged(false)
+    }
+
     private fun ensureUnrestrictedHighRefreshRateWindow() {
-        // Intentionally do not set preferredDisplayModeId or preferredRefreshRate on window.attributes
-        // so the app never votes on DisplayModeDirector or alters the device's native refresh rate.
-    }
-
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        handleIntent(intent)
-    }
-
-    private fun handleIntent(intent: Intent?) {
-        if (intent?.action == DragonMonitorService.ACTION_OPEN_PROFILES ||
-            intent?.action == "com.example.dragonkernel.ACTION_OPEN_PROFILES"
-        ) {
-            openProfileDialogOnLaunch.value = true
-        }
     }
 }
 
 enum class NavigationTab(val label: String, val hudCode: String, val icon: ImageVector) {
     DASHBOARD("HUD", "CMD", Icons.Default.Dashboard),
-    CPU("CPU", "CORES", Icons.Default.Memory),
-    GPU("GPU", "ADRENO", Icons.Default.SportsEsports),
-    BATTERY("POWER", "90W", Icons.Default.BatteryChargingFull),
-    TOOLS("TOOLS", "TUNER", Icons.Default.Build),
+    BATTERY("POWER", "CHARGING", Icons.Default.BatteryChargingFull),
+    FRAMEGEN("FrameGen", "MOTION", Icons.Default.AutoAwesomeMotion),
+    DOWNLOADER("Downloader", "DL", Icons.Default.CloudDownload),
+    MORE("MORE", "SUITE", Icons.Default.MoreHoriz),
     ABOUT("INFO", "SYS", Icons.Default.Info)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DragonKernelMainScreen(
-    repository: KernelRepository,
-    showProfileDialogInitial: Boolean,
-    onResetProfileDialogFlag: () -> Unit
+    repository: KernelRepository
 ) {
     var selectedTab by remember { mutableStateOf(NavigationTab.DASHBOARD) }
-    var showProfileDialog by remember { mutableStateOf(showProfileDialogInitial) }
-    val activeProfile by repository.activeProfileFlow.collectAsState()
-    val customProfiles by repository.customProfilesFlow.collectAsState()
-    val activeCustomProfile by repository.activeCustomProfileFlow.collectAsState()
     val feedbackMessage by repository.lastActionFeedbackFlow.collectAsState()
     val isRootGranted by repository.isRootGrantedFlow.collectAsState()
 
@@ -174,13 +157,6 @@ fun DragonKernelMainScreen(
         selectedTab = NavigationTab.DASHBOARD
     }
 
-    LaunchedEffect(showProfileDialogInitial) {
-        if (showProfileDialogInitial) {
-            showProfileDialog = true
-            onResetProfileDialogFlag()
-        }
-    }
-
     LaunchedEffect(feedbackMessage) {
         feedbackMessage?.let { msg ->
             snackbarHostState.showSnackbar(
@@ -189,24 +165,6 @@ fun DragonKernelMainScreen(
             )
             repository.clearFeedback()
         }
-    }
-
-    if (showProfileDialog) {
-        val currentFps by repository.currentFpsFlow.collectAsState()
-        val cpuTemp by repository.cpuTempFlow.collectAsState()
-        val gpuConfig by repository.gpuConfigFlow.collectAsState()
-        ProfileSelectionDialog(
-            currentProfile = activeProfile,
-            customProfiles = customProfiles,
-            activeCustomProfile = activeCustomProfile,
-            liveFps = currentFps,
-            liveCpuTemp = cpuTemp,
-            liveGpuMhz = gpuConfig.curFreqMhz,
-            onSelectProfile = { repository.setBatteryProfile(it) },
-            onSelectCustomProfile = { repository.setCustomBatteryProfile(it) },
-            onDeleteCustomProfile = { repository.deleteCustomProfile(it) },
-            onDismiss = { showProfileDialog = false }
-        )
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -226,12 +184,9 @@ fun DragonKernelMainScreen(
                 DragonGamingHudTopBar(
                     repository = repository,
                     isRootGranted = isRootGranted,
-                    activeProfileLabel = activeCustomProfile?.title ?: activeProfile.title,
-                    isGamingActive = activeCustomProfile == null && activeProfile == BatteryProfile.GAMING,
                     isLiquidGlass = isLiquidGlass,
                     refractionIntensity = themeConfig.liquidGlassRefraction,
-                    onOpenProfileSwitcher = { showProfileDialog = true },
-                    onFpsClick = { selectedTab = NavigationTab.TOOLS }
+                    onFpsClick = { selectedTab = NavigationTab.MORE }
                 )
             },
             bottomBar = {
@@ -401,13 +356,19 @@ fun DragonKernelMainScreen(
                     NavigationTab.DASHBOARD -> DashboardScreen(
                         repository = repository,
                         onNavigateToTab = { tabIndex ->
-                            selectedTab = NavigationTab.values().getOrElse(tabIndex) { NavigationTab.DASHBOARD }
+                            selectedTab = when (tabIndex) {
+                                1 -> NavigationTab.BATTERY
+                                2 -> NavigationTab.MORE
+                                3 -> NavigationTab.ABOUT
+                                4 -> NavigationTab.FRAMEGEN
+                                else -> NavigationTab.DASHBOARD
+                            }
                         }
                     )
-                    NavigationTab.CPU -> CpuScreen(repository = repository)
-                    NavigationTab.GPU -> GpuScreen(repository = repository)
                     NavigationTab.BATTERY -> BatteryScreen(repository = repository)
-                    NavigationTab.TOOLS -> ToolsScreen(repository = repository)
+                    NavigationTab.FRAMEGEN -> FrameGenScreen(repository = repository)
+                    NavigationTab.DOWNLOADER -> DownloaderScreen(repository = repository)
+                    NavigationTab.MORE -> ToolsScreen(repository = repository)
                     NavigationTab.ABOUT -> AboutScreen(repository = repository)
                 }
             }
@@ -596,11 +557,8 @@ private fun IosLiquidGlassBackdrop(
 private fun DragonGamingHudTopBar(
     repository: KernelRepository,
     isRootGranted: Boolean,
-    activeProfileLabel: String,
-    isGamingActive: Boolean,
     isLiquidGlass: Boolean = false,
     refractionIntensity: Float = 0.85f,
-    onOpenProfileSwitcher: () -> Unit,
     onFpsClick: () -> Unit
 ) {
     val currentFps by repository.currentFpsFlow.collectAsState()
@@ -662,18 +620,11 @@ private fun DragonGamingHudTopBar(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "DRAGON",
+                        text = "DRAGON TOOLS",
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Black,
                         letterSpacing = 1.sp,
                         color = Color.White
-                    )
-                    Text(
-                        text = " // GLASS",
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White.copy(alpha = 0.75f)
                     )
                 }
 
@@ -714,33 +665,6 @@ private fun DragonGamingHudTopBar(
                             color = tempColor
                         )
                     }
-
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Color.White.copy(alpha = 0.20f))
-                            .border(1.dp, Color.White.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
-                            .clickable(onClick = onOpenProfileSwitcher)
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                            .testTag("hud_profile_pill")
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = if (isGamingActive) Icons.Default.SportsEsports else Icons.Default.Bolt,
-                                contentDescription = "Active Profile",
-                                tint = Color.White,
-                                modifier = Modifier.size(12.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = activeProfileLabel.take(12).uppercase(Locale.US),
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = Color.White,
-                                maxLines = 1
-                            )
-                        }
-                    }
                 }
             }
         }
@@ -770,22 +694,15 @@ private fun DragonGamingHudTopBar(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "DRAGON",
+                    text = "DRAGON TOOLS",
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Black,
                     letterSpacing = 1.2.sp,
                     color = primaryColor
                 )
-                Text(
-                    text = " // HUD",
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
             }
 
-            // Right: Live Telemetry Pills (FPS + Temp + Active Mode Switcher)
+            // Right: Live Telemetry Pills (FPS + Temp)
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -824,42 +741,6 @@ private fun DragonGamingHudTopBar(
                         fontWeight = FontWeight.Bold,
                         color = tempColor
                     )
-                }
-
-                // Quick Profile Switcher Pill
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(
-                            if (isGamingActive) primaryColor.copy(alpha = 0.22f)
-                            else MaterialTheme.colorScheme.surfaceVariant
-                        )
-                        .border(
-                            1.dp,
-                            primaryColor.copy(alpha = if (isGamingActive) 0.7f else 0.35f),
-                            RoundedCornerShape(8.dp)
-                        )
-                        .clickable(onClick = onOpenProfileSwitcher)
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                        .testTag("hud_profile_pill")
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = if (isGamingActive) Icons.Default.SportsEsports else Icons.Default.Bolt,
-                            contentDescription = "Active Profile",
-                            tint = primaryColor,
-                            modifier = Modifier.size(12.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = activeProfileLabel.take(12).uppercase(Locale.US),
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            letterSpacing = 0.4.sp,
-                            color = primaryColor,
-                            maxLines = 1
-                        )
-                    }
                 }
             }
         }

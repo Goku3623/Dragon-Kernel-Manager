@@ -1,20 +1,12 @@
 package com.example.ui.screens
 
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -32,11 +24,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.data.model.BatteryProfile
 import com.example.data.repository.KernelRepository
 import com.example.service.DragonMonitorService
-import com.example.ui.components.ProfileSelectionDialog
-import com.example.ui.components.ThermalAlertBanner
 import com.example.ui.theme.AmberGold
 import com.example.ui.theme.DangerRed
 import com.example.ui.theme.ElectricViolet
@@ -53,39 +42,18 @@ fun DashboardScreen(
     onNavigateToTab: (Int) -> Unit
 ) {
     val context = LocalContext.current
-    val activeProfile by repository.activeProfileFlow.collectAsState()
-    val customProfiles by repository.customProfilesFlow.collectAsState()
-    val activeCustomProfile by repository.activeCustomProfileFlow.collectAsState()
     val battery by repository.batteryFlow.collectAsState()
     val cpuTemp by repository.cpuTempFlow.collectAsState()
     val cpuLoad by repository.cpuLoadFlow.collectAsState()
     val cpuClusters by repository.cpuClustersFlow.collectAsState()
     val gpuConfig by repository.gpuConfigFlow.collectAsState()
-    val thermalConfig by repository.thermalConfigFlow.collectAsState()
     val isRootGranted by repository.isRootGrantedFlow.collectAsState()
-    val chargingControls by repository.chargingControlsFlow.collectAsState()
     val currentFps by repository.currentFpsFlow.collectAsState()
     val vramConfig by repository.vramConfigFlow.collectAsState()
+    val deviceInfo by repository.deviceInfoFlow.collectAsState()
+    val themeConfig by repository.themeConfigFlow.collectAsState()
     val themeCustomization = LocalThemeCustomization.current
 
-    var showProfileDialog by remember { mutableStateOf(false) }
-
-    if (showProfileDialog) {
-        ProfileSelectionDialog(
-            currentProfile = activeProfile,
-            customProfiles = customProfiles,
-            activeCustomProfile = activeCustomProfile,
-            liveFps = currentFps,
-            liveCpuTemp = cpuTemp,
-            liveGpuMhz = gpuConfig.curFreqMhz,
-            onSelectProfile = { repository.setBatteryProfile(it) },
-            onSelectCustomProfile = { repository.setCustomBatteryProfile(it) },
-            onDeleteCustomProfile = { repository.deleteCustomProfile(it) },
-            onDismiss = { showProfileDialog = false }
-        )
-    }
-
-    val isGamingMode = activeCustomProfile == null && activeProfile == BatteryProfile.GAMING
     val primaryColor = MaterialTheme.colorScheme.primary
     val secondaryColor = MaterialTheme.colorScheme.secondary
 
@@ -103,7 +71,7 @@ fun DashboardScreen(
                     .background(
                         Brush.verticalGradient(
                             listOf(
-                                primaryColor.copy(alpha = (themeCustomization.headerGlowIntensity + if (isGamingMode) 0.08f else 0f).coerceIn(0.05f, 0.55f)),
+                                primaryColor.copy(alpha = (themeCustomization.headerGlowIntensity + 0.08f).coerceIn(0.05f, 0.55f)),
                                 secondaryColor.copy(alpha = (themeCustomization.headerGlowIntensity * 0.35f).coerceIn(0.02f, 0.25f)),
                                 Color.Transparent
                             )
@@ -120,7 +88,7 @@ fun DashboardScreen(
                         Column(modifier = Modifier.weight(1f)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
-                                    text = "COMMAND CENTER // SM8635",
+                                    text = "COMMAND CENTER // ${deviceInfo.boardHardware.uppercase(Locale.US)}",
                                     fontSize = 10.sp,
                                     fontFamily = FontFamily.Monospace,
                                     fontWeight = FontWeight.Bold,
@@ -154,14 +122,14 @@ fun DashboardScreen(
                             }
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "DRAGON KERNEL HUD",
+                                text = "DRAGON TOOLS HUD",
                                 fontSize = 21.sp,
                                 fontWeight = FontWeight.Black,
                                 letterSpacing = 0.8.sp,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = "Xiaomi POCO F6 • Snapdragon 8s Gen 3 • Adreno 735",
+                                text = "${deviceInfo.manufacturer} ${deviceInfo.model} (${deviceInfo.deviceCode}) • ${deviceInfo.socName} • ${deviceInfo.gpuName}",
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -192,170 +160,12 @@ fun DashboardScreen(
                             )
                         }
                     }
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    // Active Engine Profile Deck
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(18.dp))
-                            .border(
-                                width = 1.dp,
-                                brush = Brush.horizontalGradient(
-                                    listOf(
-                                        primaryColor.copy(alpha = 0.7f),
-                                        NeonCyan.copy(alpha = 0.4f),
-                                        primaryColor.copy(alpha = 0.7f)
-                                    )
-                                ),
-                                shape = RoundedCornerShape(18.dp)
-                            )
-                            .clickable { showProfileDialog = true }
-                            .testTag("active_profile_card"),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                    ) {
-                        Column(modifier = Modifier.padding(14.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(46.dp)
-                                        .clip(RoundedCornerShape(13.dp))
-                                        .background(
-                                            Brush.linearGradient(
-                                                listOf(
-                                                    primaryColor.copy(alpha = 0.28f),
-                                                    NeonCyan.copy(alpha = 0.14f)
-                                                )
-                                            )
-                                        )
-                                        .border(
-                                            1.dp,
-                                            primaryColor.copy(alpha = 0.5f),
-                                            RoundedCornerShape(13.dp)
-                                        ),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = if (isGamingMode) Icons.Default.SportsEsports else Icons.Default.Bolt,
-                                        contentDescription = "Active Mode",
-                                        tint = primaryColor,
-                                        modifier = Modifier.size(26.dp)
-                                    )
-                                }
-
-                                Spacer(modifier = Modifier.width(12.dp))
-
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(
-                                            text = "ENGINE MODE",
-                                            fontSize = 9.sp,
-                                            fontFamily = FontFamily.Monospace,
-                                            fontWeight = FontWeight.Bold,
-                                            letterSpacing = 1.sp,
-                                            color = NeonCyan
-                                        )
-                                        if (isGamingMode) {
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            Text(
-                                                text = "• 1100 MHz TURBO",
-                                                fontSize = 9.sp,
-                                                fontFamily = FontFamily.Monospace,
-                                                fontWeight = FontWeight.ExtraBold,
-                                                color = SuccessGreen
-                                            )
-                                        }
-                                    }
-                                    Text(
-                                        text = activeCustomProfile?.title ?: activeProfile.title,
-                                        fontSize = 17.sp,
-                                        fontWeight = FontWeight.Black,
-                                        color = primaryColor
-                                    )
-                                    Text(
-                                        text = activeCustomProfile?.description ?: activeProfile.description,
-                                        fontSize = 11.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1
-                                    )
-                                }
-
-                                FilledTonalButton(
-                                    onClick = { showProfileDialog = true },
-                                    shape = RoundedCornerShape(10.dp),
-                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-                                ) {
-                                    Text("Profiles", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            // 1-Tap Quick Gaming & Performance Mode Strip
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .horizontalScroll(rememberScrollState()),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                QuickModeChip(
-                                    label = "GAMING TURBO",
-                                    icon = Icons.Default.SportsEsports,
-                                    isSelected = activeCustomProfile == null && activeProfile == BatteryProfile.GAMING,
-                                    accentColor = primaryColor,
-                                    onClick = { repository.setBatteryProfile(BatteryProfile.GAMING) }
-                                )
-                                QuickModeChip(
-                                    label = "PEAK PERF",
-                                    icon = Icons.Default.Speed,
-                                    isSelected = activeCustomProfile == null && activeProfile == BatteryProfile.PERFORMANCE,
-                                    accentColor = AmberGold,
-                                    onClick = { repository.setBatteryProfile(BatteryProfile.PERFORMANCE) }
-                                )
-                                QuickModeChip(
-                                    label = "BALANCED",
-                                    icon = Icons.Default.Balance,
-                                    isSelected = activeCustomProfile == null && activeProfile == BatteryProfile.BALANCED,
-                                    accentColor = NeonCyan,
-                                    onClick = { repository.setBatteryProfile(BatteryProfile.BALANCED) }
-                                )
-                                QuickModeChip(
-                                    label = "AUTO SMART",
-                                    icon = Icons.Default.AutoAwesome,
-                                    isSelected = activeCustomProfile == null && activeProfile == BatteryProfile.AUTO,
-                                    accentColor = ElectricViolet,
-                                    onClick = { repository.setBatteryProfile(BatteryProfile.AUTO) }
-                                )
-                                QuickModeChip(
-                                    label = "SAVER",
-                                    icon = Icons.Default.Eco,
-                                    isSelected = activeCustomProfile == null && activeProfile == BatteryProfile.POWER_SAVING,
-                                    accentColor = SuccessGreen,
-                                    onClick = { repository.setBatteryProfile(BatteryProfile.POWER_SAVING) }
-                                )
-                            }
-                        }
-                    }
                 }
             }
         }
 
-        item(key = "thermal_alert_banner") {
-            // Thermal Warning Banner
-            ThermalAlertBanner(
-                batTemp = battery.temperatureC,
-                cpuTemp = cpuTemp,
-                criticalThreshold = thermalConfig.criticalThresholdC,
-                onActivateCooling = { repository.setBatteryProfile(BatteryProfile.POWER_SAVING) }
-            )
-        }
-
         item(key = "telemetry_matrix") {
-            // Live 6-Tile Gaming Telemetry Matrix
+            // Live 6-Tile Hardware Telemetry Matrix
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
                 Row(
                     modifier = Modifier
@@ -373,7 +183,7 @@ fun DashboardScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        text = "120Hz LIVE POLLING",
+                        text = "LIVE POLLING ACTIVE",
                         fontSize = 10.sp,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
@@ -395,7 +205,7 @@ fun DashboardScreen(
                         accentColor = if (currentFps >= 90) SuccessGreen else NeonCyan,
                         progress = (currentFps / 120f).coerceIn(0f, 1f),
                         modifier = Modifier.weight(1f),
-                        onClick = { onNavigateToTab(4) }
+                        onClick = { onNavigateToTab(2) }
                     )
                     TelemetryMiniCard(
                         title = "CPU THERMALS",
@@ -405,7 +215,7 @@ fun DashboardScreen(
                         accentColor = if (cpuTemp > 65f) DangerRed else primaryColor,
                         progress = (cpuLoad / 100f).coerceIn(0f, 1f),
                         modifier = Modifier.weight(1f),
-                        onClick = { onNavigateToTab(1) }
+                        onClick = { onNavigateToTab(0) }
                     )
                 }
 
@@ -435,7 +245,7 @@ fun DashboardScreen(
                         accentColor = ElectricViolet,
                         progress = ramRatio.coerceIn(0f, 1f),
                         modifier = Modifier.weight(1f),
-                        onClick = { onNavigateToTab(4) }
+                        onClick = { onNavigateToTab(2) }
                     )
                 }
 
@@ -454,7 +264,7 @@ fun DashboardScreen(
                         accentColor = if (battery.temperatureC > 42f) WarningOrange else SuccessGreen,
                         progress = (battery.levelPercent / 100f).coerceIn(0f, 1f),
                         modifier = Modifier.weight(1f),
-                        onClick = { onNavigateToTab(3) }
+                        onClick = { onNavigateToTab(1) }
                     )
                     TelemetryMiniCard(
                         title = if (battery.isCharging) "LIVE CHARGE SPEED" else "DISCHARGE RATE",
@@ -464,7 +274,7 @@ fun DashboardScreen(
                         accentColor = if (battery.isCharging) SuccessGreen else AmberGold,
                         progress = if (battery.isCharging) (battery.chargeSpeedWatts / 90f).coerceIn(0.08f, 1f) else (battery.dischargeRateMa / 2500f).coerceIn(0.08f, 1f),
                         modifier = Modifier.weight(1f),
-                        onClick = { onNavigateToTab(3) }
+                        onClick = { onNavigateToTab(1) }
                     )
                 }
             }
@@ -497,13 +307,6 @@ fun DashboardScreen(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
-                        }
-                        FilledTonalButton(
-                            onClick = { onNavigateToTab(1) },
-                            shape = RoundedCornerShape(10.dp),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-                        ) {
-                            Text("Tune CPU", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                     }
 
@@ -569,160 +372,194 @@ fun DashboardScreen(
         }
 
         item(key = "battery_health_card") {
-            // Battery & Drain Health Card
+            // Compact Battery & Drain Health Card
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                shape = RoundedCornerShape(18.dp),
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                shape = RoundedCornerShape(14.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                 border = CardDefaults.outlinedCardBorder()
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
+                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.BatteryStd, contentDescription = "Battery", tint = SuccessGreen)
-                            Spacer(modifier = Modifier.width(8.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.BatteryStd,
+                                contentDescription = "Battery",
+                                tint = SuccessGreen,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
                             Column {
-                                Text("POWER DRAIN & CELL HEALTH", fontWeight = FontWeight.ExtraBold, fontSize = 13.sp)
+                                Text(
+                                    text = "POWER DRAIN & CELL HEALTH",
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontSize = 11.sp
+                                )
                                 Text(
                                     text = battery.healthAndCycleSource,
-                                    fontSize = 10.sp,
+                                    fontSize = 8.5.sp,
                                     fontFamily = FontFamily.Monospace,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1
                                 )
                             }
                         }
                         FilledTonalButton(
-                            onClick = { onNavigateToTab(3) },
-                            shape = RoundedCornerShape(10.dp),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                            onClick = { onNavigateToTab(1) },
+                            modifier = Modifier.height(26.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                         ) {
-                            Text("90W Control", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Text("Charging Control", fontSize = 9.5.sp, fontWeight = FontWeight.Bold)
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         DrainStatItem("Health (SOH)", "${battery.healthPercent}% (${battery.healthStatusText})", SuccessGreen)
-                        DrainStatItem("Full / Design", "${battery.learnedFullCapacityMah} / ${battery.designCapacityMah}", MaterialTheme.colorScheme.onSurface)
+                        DrainStatItem("Full / Design", "${battery.learnedFullCapacityMah}/${battery.designCapacityMah}", MaterialTheme.colorScheme.onSurface)
                         DrainStatItem("Cycles", "${battery.chargeCycles}", NeonCyan)
                         DrainStatItem("Deep Sleep", String.format(Locale.US, "%.0f%%", battery.deepSleepPercent), primaryColor)
                     }
 
-                    Spacer(modifier = Modifier.height(10.dp))
-                    HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f))
+                    Spacer(modifier = Modifier.height(6.dp))
 
-                    // Borderless, Simple Live Notification Telemetry Readout (Matches System Notification Shade)
+                    // Compact Live Notification Telemetry Readout
+                    val activeHudStyle = themeConfig.notificationPanelStyle
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
-                            .padding(horizontal = 14.dp, vertical = 12.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(
+                                when (activeHudStyle) {
+                                    com.example.data.model.NotificationPanelStyle.STOCK_SIMPLE -> androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
+                                    com.example.data.model.NotificationPanelStyle.DYNAMIC_THEME_GLOW -> Brush.verticalGradient(
+                                        listOf(
+                                            primaryColor.copy(alpha = 0.20f),
+                                            secondaryColor.copy(alpha = 0.10f),
+                                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+                                        )
+                                    )
+                                    com.example.data.model.NotificationPanelStyle.IOS_LIQUID_GLASS_COMPACT -> Brush.linearGradient(
+                                        listOf(
+                                            Color.White.copy(alpha = 0.14f),
+                                            Color(0xFF38BDF8).copy(alpha = 0.10f),
+                                            Color(0xFF0F2B44)
+                                        )
+                                    )
+                                }
+                            )
+                            .border(
+                                width = 1.dp,
+                                color = when (activeHudStyle) {
+                                    com.example.data.model.NotificationPanelStyle.STOCK_SIMPLE -> MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
+                                    com.example.data.model.NotificationPanelStyle.DYNAMIC_THEME_GLOW -> primaryColor.copy(alpha = 0.60f)
+                                    com.example.data.model.NotificationPanelStyle.IOS_LIQUID_GLASS_COMPACT -> Color(0xFFE0F7FA).copy(alpha = 0.60f)
+                                },
+                                shape = RoundedCornerShape(10.dp)
+                            )
+                            .padding(horizontal = 9.dp, vertical = 6.dp)
                             .testTag("notification_hud_live_card")
                     ) {
                         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            // Line 1: 100% • 615 mA (2.7 W) • 35°C
-                            Text(
-                                text = String.format(
-                                    Locale.US,
-                                    "%d%% • %d mA (%.1f W) • %.0f°C",
-                                    battery.levelPercent,
-                                    kotlin.math.abs(battery.currentMa),
-                                    battery.livePowerWatts,
-                                    battery.temperatureC
-                                ),
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            // Line 2: Active: 0.0%/h • Idle: 0.0%/h
-                            Text(
-                                text = String.format(
-                                    Locale.US,
-                                    "Active: %.1f%%/h • Idle: %.1f%%/h",
-                                    battery.activeDrainPerHour,
-                                    battery.idleDrainPerHour
-                                ),
-                                fontSize = 13.sp,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f)
-                            )
-                            // Line 3: Screen On: 54s • 0.0% (7 mAh)
-                            Text(
-                                text = String.format(
-                                    Locale.US,
-                                    "Screen On: %s • %.1f%% (%d mAh)",
-                                    battery.screenOnTimeFormatted,
-                                    battery.screenOnDrainPercent,
-                                    battery.screenOnDrainMah
-                                ),
-                                fontSize = 13.sp,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f)
-                            )
-                            // Line 4: Screen Off: 0s • 0.0% (0 mAh)
-                            Text(
-                                text = String.format(
-                                    Locale.US,
-                                    "Screen Off: %s • %.1f%% (%d mAh)",
-                                    battery.screenOffTimeFormatted,
-                                    battery.screenOffDrainPercent,
-                                    battery.screenOffDrainMah
-                                ),
-                                fontSize = 13.sp,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f)
-                            )
-                            // Line 5: Deep sleep: 0s • 0.0%
-                            Text(
-                                text = String.format(
-                                    Locale.US,
-                                    "Deep sleep: %s • %.1f%%",
-                                    battery.deepSleepTimeFormatted,
-                                    battery.deepSleepPercent
-                                ),
-                                fontSize = 13.sp,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
-                            )
-                            // Line 6: Awake: 0s • 100.0%
-                            Text(
-                                text = String.format(
-                                    Locale.US,
-                                    "Awake: %s • %.1f%%",
-                                    battery.awakeTimeFormatted,
-                                    battery.awakePercent
-                                ),
-                                fontSize = 13.sp,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
-                            )
-
-                            Spacer(modifier = Modifier.height(6.dp))
-
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                TextButton(
-                                    onClick = { showProfileDialog = true },
-                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                    modifier = Modifier.testTag("notif_preview_change_profile_btn")
-                                ) {
-                                    Text(
-                                        text = "Change Battery Profile",
-                                        fontSize = 12.5.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = primaryColor
-                                    )
-                                }
+                                Text(
+                                    text = String.format(
+                                        Locale.US,
+                                        "%d%% • %d mA (%.1fW) • %.0f°C",
+                                        battery.levelPercent,
+                                        kotlin.math.abs(battery.currentMa),
+                                        battery.livePowerWatts,
+                                        battery.temperatureC
+                                    ),
+                                    fontSize = 10.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (activeHudStyle == com.example.data.model.NotificationPanelStyle.DYNAMIC_THEME_GLOW) primaryColor else MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = String.format(
+                                        Locale.US,
+                                        "Act Drain: %.1f%% (%.1f%%/h) • Idle Drain: %.1f%% (%.1f%%/h)",
+                                        battery.screenOnDrainPercent,
+                                        battery.activeDrainPerHour,
+                                        battery.screenOffDrainPercent,
+                                        battery.idleDrainPerHour
+                                    ),
+                                    fontSize = 9.5.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f)
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = String.format(
+                                        Locale.US,
+                                        "Screen On: %s • %.1f%% (%d mAh)",
+                                        battery.screenOnTimeFormatted,
+                                        battery.screenOnDrainPercent,
+                                        battery.screenOnDrainMah
+                                    ),
+                                    fontSize = 9.5.sp,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.88f)
+                                )
+                                Text(
+                                    text = String.format(
+                                        Locale.US,
+                                        "Screen Off: %s • %.1f%% (%d mAh)",
+                                        battery.screenOffTimeFormatted,
+                                        battery.screenOffDrainPercent,
+                                        battery.screenOffDrainMah
+                                    ),
+                                    fontSize = 9.5.sp,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.88f)
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = String.format(
+                                        Locale.US,
+                                        "Deep sleep: %s • %.1f%%",
+                                        battery.deepSleepTimeFormatted,
+                                        battery.deepSleepPercent
+                                    ),
+                                    fontSize = 9.5.sp,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
+                                )
+                                Text(
+                                    text = String.format(
+                                        Locale.US,
+                                        "Awake: %s • %.1f%%",
+                                        battery.awakeTimeFormatted,
+                                        battery.awakePercent
+                                    ),
+                                    fontSize = 9.5.sp,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
+                                )
                             }
                         }
                     }
@@ -742,7 +579,7 @@ fun DashboardScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "GAMING BOOSTERS & TELEMETRY DAEMON",
+                        text = "SYSTEM UTILITIES & TELEMETRY DAEMON",
                         fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
@@ -794,103 +631,28 @@ fun DashboardScreen(
 }
 
 @Composable
-private fun QuickModeChip(
-    label: String,
-    icon: ImageVector,
-    isSelected: Boolean,
-    accentColor: Color,
-    onClick: () -> Unit
-) {
-    val bgColor by animateColorAsState(
-        targetValue = if (isSelected) accentColor.copy(alpha = 0.22f)
-        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
-        animationSpec = tween(180),
-        label = "chip_bg_$label"
-    )
-    val borderColor by animateColorAsState(
-        targetValue = if (isSelected) accentColor else MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
-        animationSpec = tween(180),
-        label = "chip_border_$label"
-    )
-    val contentColor by animateColorAsState(
-        targetValue = if (isSelected) accentColor else MaterialTheme.colorScheme.onSurfaceVariant,
-        animationSpec = tween(180),
-        label = "chip_content_$label"
-    )
-
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(12.dp))
-            .background(bgColor)
-            .border(
-                width = 1.dp,
-                color = borderColor,
-                shape = RoundedCornerShape(12.dp)
-            )
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 8.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                imageVector = icon,
-                contentDescription = label,
-                tint = contentColor,
-                modifier = Modifier.size(14.dp)
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                text = label,
-                fontSize = 10.sp,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.SemiBold,
-                color = contentColor
-            )
-        }
-    }
-}
-
-@Composable
-fun TelemetryMiniCard(
+private fun TelemetryMiniCard(
     title: String,
     value: String,
     subtitle: String,
     icon: ImageVector,
     accentColor: Color,
+    progress: Float,
     modifier: Modifier = Modifier,
-    progress: Float? = null,
     onClick: () -> Unit
 ) {
-    val themeCustomization = LocalThemeCustomization.current
-    val cardShape = RoundedCornerShape(themeCustomization.cornerRadiusDp.dp)
-    val glowAlpha = (themeCustomization.borderGlowIntensity * 0.55f).coerceIn(0.16f, 0.70f)
-    val animatedAccent by animateColorAsState(
-        targetValue = accentColor,
-        animationSpec = tween(220),
-        label = "telemetry_accent_$title"
-    )
-
     Card(
         modifier = modifier
-            .clip(cardShape)
-            .border(1.dp, animatedAccent.copy(alpha = glowAlpha), cardShape)
-            .clickable(onClick = onClick),
-        shape = cardShape,
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            .clip(RoundedCornerShape(16.dp))
+            .border(
+                1.dp,
+                accentColor.copy(alpha = 0.35f),
+                RoundedCornerShape(16.dp)
+            ),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        onClick = onClick
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(
-                    Brush.linearGradient(
-                        listOf(
-                            animatedAccent.copy(alpha = 0.07f),
-                            Color.Transparent
-                        )
-                    )
-                )
-                .padding(14.dp)
-                .animateContentSize()
-        ) {
+        Column(modifier = Modifier.padding(12.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -898,78 +660,59 @@ fun TelemetryMiniCard(
             ) {
                 Text(
                     text = title,
-                    fontSize = 9.5.sp,
+                    fontSize = 9.sp,
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.7.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = accentColor
                 )
-                Box(
-                    modifier = Modifier
-                        .size(26.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(animatedAccent.copy(alpha = 0.15f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = icon,
-                        contentDescription = title,
-                        tint = animatedAccent,
-                        modifier = Modifier.size(15.dp)
-                    )
-                }
+                Icon(
+                    imageVector = icon,
+                    contentDescription = title,
+                    tint = accentColor,
+                    modifier = Modifier.size(16.dp)
+                )
             }
-
-            Spacer(modifier = Modifier.height(6.dp))
-
+            Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = value,
                 fontSize = 17.sp,
                 fontWeight = FontWeight.Black,
-                fontFamily = FontFamily.Monospace,
-                color = animatedAccent,
-                maxLines = 1
+                color = MaterialTheme.colorScheme.onSurface
             )
-
             Text(
                 text = subtitle,
                 fontSize = 10.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1
             )
-
-            if (progress != null) {
-                val animatedBar by animateFloatAsState(
-                    targetValue = progress.coerceIn(0f, 1f),
-                    animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow),
-                    label = "telemetry_bar_$title"
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                LinearProgressIndicator(
-                    progress = { animatedBar },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(4.dp)
-                        .clip(RoundedCornerShape(2.dp)),
-                    color = animatedAccent,
-                    trackColor = MaterialTheme.colorScheme.surfaceVariant
-                )
-            }
+            Spacer(modifier = Modifier.height(8.dp))
+            LinearProgressIndicator(
+                progress = { progress },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp)),
+                color = accentColor,
+                trackColor = MaterialTheme.colorScheme.surfaceVariant
+            )
         }
     }
 }
 
 @Composable
-fun DrainStatItem(label: String, value: String, valueColor: Color) {
+private fun DrainStatItem(
+    label: String,
+    value: String,
+    valueColor: Color
+) {
     Column {
-        Text(text = label, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(label, fontSize = 8.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(
             text = value,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Bold,
+            fontSize = 10.5.sp,
+            fontWeight = FontWeight.ExtraBold,
             fontFamily = FontFamily.Monospace,
             color = valueColor
         )
     }
 }
-

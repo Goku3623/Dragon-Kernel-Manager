@@ -1,6 +1,6 @@
 {
-  "name": "Dragon Kernel Manager",
-  "description": "Advanced Kernel & Hardware Manager for Xiaomi POCO F6 with CPU/GPU tuning, 90W HyperCharge controls, real-time telemetry, and thermal profiles.",
+  "name": "Dragon Tools",
+  "description": "Comprehensive Android Hardware Telemetry & Utility Suite with HyperCharge controls, real-time FPS benchmark, RAM manager, and battery health tools.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
