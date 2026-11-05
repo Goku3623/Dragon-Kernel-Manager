@@ -244,6 +244,7 @@ data class DownloaderTask(
     val verifiedCodec: String? = null,
     val errorType: DownloaderErrorType? = null,
     val errorMessage: String? = null,
+    val batchSessionId: String? = null,
     val createdAtMs: Long = System.currentTimeMillis()
 ) {
     val downloadedSizeFormatted: String
@@ -255,6 +256,77 @@ data class DownloaderTask(
         } else {
             "Unknown size"
         }
+}
+
+enum class BatchDownloadMode(val displayName: String, val isAudioOnly: Boolean) {
+    BEST_VIDEO("Best Video (1080p / 720p MP4)", false),
+    VIDEO_1080P("1080p Full HD Video", false),
+    VIDEO_720P("720p HD Video", false),
+    VIDEO_480P("480p Standard Video", false),
+    AUDIO_MP3("Audio MP3 (320 kbps)", true),
+    AUDIO_M4A("Audio M4A / AAC (Lossless Fast)", true),
+    ORIGINAL_BEST("Smart Match (Best Available)", false)
+}
+
+data class BatchDownloadConfig(
+    val downloadMode: BatchDownloadMode = BatchDownloadMode.BEST_VIDEO,
+    val preferredResolutionHeight: Int = 1080,
+    val preferredAudioBitrateKbps: Int = 320,
+    val maxConcurrentDownloads: Int = 2
+)
+
+enum class BatchItemState(val label: String) {
+    QUEUED("Queued"),
+    FETCHING("Extracting Metadata..."),
+    DOWNLOADING("Downloading..."),
+    COMPLETED("Completed"),
+    FAILED("Failed")
+}
+
+data class BatchDownloadItemStatus(
+    val index: Int = 0,
+    val url: String,
+    val platform: MediaPlatform,
+    val state: BatchItemState = BatchItemState.QUEUED,
+    val taskId: String? = null,
+    val title: String? = null,
+    val qualityLabel: String? = null,
+    val thumbnailUrl: String? = null,
+    val progress: Float = 0f,
+    val downloadedBytes: Long = 0L,
+    val totalBytes: Long = 0L,
+    val errorMessage: String? = null
+)
+
+data class BatchSession(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val totalCount: Int = 0,
+    val totalUrls: Int = totalCount,
+    val completedCount: Int = 0,
+    val failedCount: Int = 0,
+    val queuedCount: Int = (totalCount - completedCount - failedCount).coerceAtLeast(0),
+    val inProgressCount: Int = 0,
+    val overallProgress: Float = 0f,
+    val items: List<BatchDownloadItemStatus> = emptyList(),
+    val isRunning: Boolean = false,
+    val isPaused: Boolean = false,
+    val isCancelled: Boolean = false,
+    val isFinished: Boolean = false,
+    val config: BatchDownloadConfig = BatchDownloadConfig(),
+    val startedAtMs: Long = System.currentTimeMillis()
+)
+
+fun extractUrlsFromText(rawText: String): List<String> {
+    if (rawText.isBlank()) return emptyList()
+    val pattern = Regex("(https?://[a-zA-Z0-9\\-_.~!*'();:@&=+$,/?#\\[\\]%]+)", RegexOption.IGNORE_CASE)
+    val matches = pattern.findAll(rawText).map { it.value.trim().trimEnd(',', ';', '"', '\'') }.distinct().toList()
+    if (matches.isNotEmpty()) return matches
+
+    // Fallback: split by lines or commas
+    return rawText.split(Regex("[\r\n,;]+"))
+        .map { it.trim() }
+        .filter { it.isNotBlank() && (it.startsWith("http://", true) || it.startsWith("https://", true) || it.contains(".")) }
+        .distinct()
 }
 
 fun formatBytes(bytes: Long): String {

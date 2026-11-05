@@ -262,10 +262,21 @@ object FrameGenMiniOverlayManager {
             gravity = Gravity.TOP or Gravity.START
             x = preservedX ?: (14 * density).roundToInt()
             y = preservedY ?: (110 * density).roundToInt()
-            // Explicitly NEVER lock or boost the display refresh rate from the floating window
+            // Synchronize hardware display refresh rate with FrameGen Target FPS (e.g. 120Hz/144Hz)
+            // This ensures SurfaceFlinger does NOT throttle or drop generated frames on both root and non-root devices!
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                preferredDisplayModeId = 0
-                preferredRefreshRate = 0f
+                val targetRate = config.targetFps.toFloat().coerceIn(60f, 165f)
+                preferredRefreshRate = targetRate
+                try {
+                    @Suppress("DEPRECATION")
+                    val defaultDisplay = wm.defaultDisplay
+                    val supportedModes = defaultDisplay?.supportedModes
+                    val matchedMode = supportedModes?.filter { it.refreshRate >= (targetRate - 2f) }?.minByOrNull { it.refreshRate }
+                        ?: supportedModes?.maxByOrNull { it.refreshRate }
+                    if (matchedMode != null && matchedMode.refreshRate >= 80f) {
+                        preferredDisplayModeId = matchedMode.modeId
+                    }
+                } catch (_: Exception) {}
             }
         }
 
@@ -668,7 +679,7 @@ object FrameGenMiniOverlayManager {
             1.4f
         }
 
-        val signature = "$style|$scale|$isPreviewOnly|${telemetry.activeForegroundTitle}|$displayNativeFps|$displayGenFps|$displayTotalFps|${(displayLatencyMs * 10).roundToInt()}|${telemetry.gpuTempC.roundToInt()}|${telemetry.isPausedByGuardrail}|${config.mode.label}"
+        val signature = "$style|$scale|$isPreviewOnly|${telemetry.activeForegroundTitle}|$displayNativeFps|$displayGenFps|$displayTotalFps|${(displayLatencyMs * 10).roundToInt()}|${telemetry.gpuTempC.roundToInt()}|${telemetry.isPausedByGuardrail}|${config.mode.label}|${telemetry.isLosslessDllActive}"
         if (signature == lastRenderedSignature) {
             return
         }
@@ -678,6 +689,7 @@ object FrameGenMiniOverlayManager {
         val accentColor = when {
             isPreviewOnly -> Color.parseColor("#00E5FF")
             telemetry.isPausedByGuardrail -> Color.parseColor("#FFB300")
+            telemetry.isLosslessDllActive -> Color.parseColor("#FFD700") // LSFG Gold
             telemetry.isActive && displayGenFps > 0 -> Color.parseColor("#00E5FF")
             else -> Color.parseColor("#78909C")
         }
@@ -687,17 +699,19 @@ object FrameGenMiniOverlayManager {
         val dp6 = (6 * scale * density).roundToInt().coerceAtLeast(1)
         val dp1 = (1 * scale * density).roundToInt().coerceAtLeast(1)
 
+        val fgPrefix = if (telemetry.isLosslessDllActive) "LSFG" else "FG"
+
         modeBadgeView?.apply {
             text = when (style) {
                 FrameGenFloatingStyle.COMPACT_PILL_BAR,
                 FrameGenFloatingStyle.VERTICAL_SIDE_DOCK -> {
-                    if (telemetry.isPausedByGuardrail && !isPreviewOnly) "GUARD" else "⚡${config.mode.label}"
+                    if (telemetry.isPausedByGuardrail && !isPreviewOnly) "GUARD" else "⚡$fgPrefix ${config.mode.label}"
                 }
                 FrameGenFloatingStyle.LIQUID_GLASS_POD -> {
-                    if (telemetry.isPausedByGuardrail && !isPreviewOnly) "✦ GUARD" else "✦ FG ${config.mode.label}"
+                    if (telemetry.isPausedByGuardrail && !isPreviewOnly) "✦ GUARD" else "✦ $fgPrefix ${config.mode.label}"
                 }
                 else -> {
-                    if (telemetry.isPausedByGuardrail && !isPreviewOnly) "GUARDRAIL" else "⚡ FG ${config.mode.label}"
+                    if (telemetry.isPausedByGuardrail && !isPreviewOnly) "GUARDRAIL" else "⚡ $fgPrefix ${config.mode.label}"
                 }
             }
             if (style == FrameGenFloatingStyle.LIQUID_GLASS_POD) {

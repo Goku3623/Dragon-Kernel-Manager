@@ -125,6 +125,32 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun ensureUnrestrictedHighRefreshRateWindow() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val currentDisplay = display
+                if (currentDisplay != null) {
+                    val supportedModes = currentDisplay.supportedModes
+                    val highRateMode = supportedModes.maxByOrNull { it.refreshRate }
+                    if (highRateMode != null && highRateMode.refreshRate >= 80f) {
+                        window.attributes = window.attributes.apply {
+                            preferredDisplayModeId = highRateMode.modeId
+                            preferredRefreshRate = highRateMode.refreshRate
+                        }
+                    }
+                }
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                @Suppress("DEPRECATION")
+                val defaultDisplay = windowManager.defaultDisplay
+                val supportedModes = defaultDisplay.supportedModes
+                val highRateMode = supportedModes.maxByOrNull { it.refreshRate }
+                if (highRateMode != null && highRateMode.refreshRate >= 80f) {
+                    window.attributes = window.attributes.apply {
+                        preferredDisplayModeId = highRateMode.modeId
+                        preferredRefreshRate = highRateMode.refreshRate
+                    }
+                }
+            }
+        } catch (_: Exception) {}
     }
 }
 
@@ -132,6 +158,7 @@ enum class NavigationTab(val label: String, val hudCode: String, val icon: Image
     DASHBOARD("HUD", "CMD", Icons.Default.Dashboard),
     BATTERY("POWER", "CHARGING", Icons.Default.BatteryChargingFull),
     FRAMEGEN("FrameGen", "MOTION", Icons.Default.AutoAwesomeMotion),
+    VISUAL_STYLE("Visual Style", "STYLE", Icons.Default.Palette),
     DOWNLOADER("Downloader", "DL", Icons.Default.CloudDownload),
     MORE("MORE", "SUITE", Icons.Default.MoreHoriz),
     ABOUT("INFO", "SYS", Icons.Default.Info)
@@ -243,16 +270,16 @@ fun DragonKernelMainScreen(
                                             imageVector = tab.icon,
                                             contentDescription = tab.label,
                                             modifier = Modifier
-                                                .size(20.dp)
+                                                .size(19.dp)
                                                 .scale(iconScale)
                                         )
                                     },
                                     label = {
                                         Text(
                                             text = tab.label,
-                                            fontSize = 10.sp,
+                                            fontSize = 8.5.sp,
                                             fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium,
-                                            letterSpacing = 0.4.sp,
+                                            letterSpacing = 0.sp,
                                             maxLines = 1
                                         )
                                     },
@@ -312,16 +339,16 @@ fun DragonKernelMainScreen(
                                             imageVector = tab.icon,
                                             contentDescription = tab.label,
                                             modifier = Modifier
-                                                .size(20.dp)
+                                                .size(19.dp)
                                                 .scale(iconScale)
                                         )
                                     },
                                     label = {
                                         Text(
                                             text = tab.label,
-                                            fontSize = 10.sp,
+                                            fontSize = 8.5.sp,
                                             fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.SemiBold,
-                                            letterSpacing = 0.6.sp,
+                                            letterSpacing = 0.sp,
                                             maxLines = 1
                                         )
                                     },
@@ -361,12 +388,14 @@ fun DragonKernelMainScreen(
                                 2 -> NavigationTab.MORE
                                 3 -> NavigationTab.ABOUT
                                 4 -> NavigationTab.FRAMEGEN
+                                5 -> NavigationTab.VISUAL_STYLE
                                 else -> NavigationTab.DASHBOARD
                             }
                         }
                     )
                     NavigationTab.BATTERY -> BatteryScreen(repository = repository)
                     NavigationTab.FRAMEGEN -> FrameGenScreen(repository = repository)
+                    NavigationTab.VISUAL_STYLE -> VisualStyleScreen(repository = repository)
                     NavigationTab.DOWNLOADER -> DownloaderScreen(repository = repository)
                     NavigationTab.MORE -> ToolsScreen(repository = repository)
                     NavigationTab.ABOUT -> AboutScreen(repository = repository)

@@ -84,6 +84,8 @@ data class BatteryTelemetry(
     val healthStatusText: String = "Good",
     val isCharging: Boolean = false,
     val isBypassCharging: Boolean = false,
+    val isBypassHardwareVerified: Boolean = false,
+    val isPluggedIn: Boolean = false,
     val isNightChargingActive: Boolean = false,
     val activeDrainPerHour: Float = 0.0f,
     val idleDrainPerHour: Float = 0.0f,
@@ -433,6 +435,8 @@ data class ChargingControls(
     val forcePmicVoterOverride: Boolean = true, // Forces Qualcomm PMIC FCC & USB_ICL hardware votables
     val activeOverrideStatus: String = "Active Preset: HyperCharge 90W (20,000 mA / 90W Max)",
     val lastRootOverrideCommand: String = "/sys/class/power_supply/battery/constant_charge_current_max",
+    val bypassHardwareVerified: Boolean = false,
+    val bypassStatusText: String = "Standby • Normal Battery Charging",
     val thermalBypassStatus: String = "Standby • ROM Default Thermal Throttling Active",
     val lastThermalBypassCommand: String = "/sys/class/power_supply/battery/system_temp_level & cooling_deviceX/cur_state"
 )
@@ -1216,7 +1220,11 @@ data class FrameGenConfig(
     val floatingSize: FrameGenFloatingSize = FrameGenFloatingSize.MEDIUM,
     val floatingWindowPreviewActive: Boolean = false,
     val showMotionVectorsInVisualizer: Boolean = true,
-    val addedGamePackages: Set<String> = emptySet()
+    val addedGamePackages: Set<String> = emptySet(),
+    val losslessDllActive: Boolean = false,
+    val losslessAntiGhosting: Boolean = true,
+    val losslessBicubicWarp: Boolean = true,
+    val losslessReflexPacing: Boolean = true
 )
 
 data class FrameGenTelemetry(
@@ -1240,7 +1248,10 @@ data class FrameGenTelemetry(
     val activeForegroundTitle: String = "Dragon Tools",
     val activeGameEngine: GameEngineType = GameEngineType.SYSTEM_OR_NON_GAME,
     val activeGraphicsApi: String = "Vulkan 1.3 / OpenGL ES 3.2",
-    val activeDeliveryMode: String = "Standby (Per-Game Foreground Mode)"
+    val activeDeliveryMode: String = "Standby (Per-Game Foreground Mode)",
+    val isLosslessDllActive: Boolean = false,
+    val losslessDllProfile: String = "",
+    val losslessConfidencePct: Float = 0.0f
 )
 
 

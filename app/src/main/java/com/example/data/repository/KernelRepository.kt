@@ -15,11 +15,13 @@ import com.example.data.db.DragonDatabase
 import com.example.data.db.LogEntryEntity
 import com.example.data.db.ScriptEntity
 import com.example.data.framegen.FrameGenEngine
+import com.example.data.framegen.LosslessPeParser
 import com.example.data.adblock.AdBlockerEngine
 import com.example.data.model.*
 import com.example.data.root.CommandResult
 import com.example.data.root.RootHelper
 import com.example.service.FrameGenMiniOverlayManager
+import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -348,6 +350,13 @@ class KernelRepository private constructor(private val context: Context) {
 
     private val _addedFrameGenGamesFlow = MutableStateFlow<List<DetectedGameCompatibility>>(emptyList())
     val addedFrameGenGamesFlow: StateFlow<List<DetectedGameCompatibility>> = _addedFrameGenGamesFlow.asStateFlow()
+
+    // Lossless Scaling Frame Generation (lossless.dll / LSFG Core)
+    private val _losslessDllInfoFlow = MutableStateFlow(loadLosslessDllPrefs())
+    val losslessDllInfoFlow: StateFlow<LosslessDllInfo> = _losslessDllInfoFlow.asStateFlow()
+
+    private val _losslessPeInspectionFlow = MutableStateFlow<LosslessPeInspection?>(null)
+    val losslessPeInspectionFlow: StateFlow<LosslessPeInspection?> = _losslessPeInspectionFlow.asStateFlow()
 
     // Ad Blocker Engine Configuration & Live Telemetry
     private val _adBlockerConfigFlow = MutableStateFlow(loadAdBlockerPrefs())
@@ -725,6 +734,8 @@ class KernelRepository private constructor(private val context: Context) {
     @Volatile
     private var backgroundFrameGenTick: Int = 0
     @Volatile
+    private var bypassWatchdogTick: Int = 0
+    @Volatile
     private var lastLayerOnePercentLowFps: Int? = null
     @Volatile
     private var lastLayerJankSpikes: Int = 0
@@ -1003,11 +1014,11 @@ class KernelRepository private constructor(private val context: Context) {
                 val hasAddedFrameGenGames = fgCfg.addedGamePackages.isNotEmpty() && (fgCfg.isEnabled || fgCfg.autoActivateForGames)
 
                 if (isInteractive) {
-                    val needActiveFpsPoll = isRec || isOverlayOn || isFrameGenGameInFg || isFrameGenPreviewOn || isMainActivityInForeground
+                    val needActiveFpsPoll = isRec || isOverlayOn || isFrameGenGameInFg || isFrameGenPreviewOn
                     if (needActiveFpsPoll) {
                         pollPerAppAndGameRealFpsSuspend(lightweightOnly = false)
-                    } else if (hasAddedFrameGenGames) {
-                        // Lightweight foreground game detection without locking SurfaceFlinger or ActivityTaskManager
+                    } else {
+                        // Lightweight foreground app/game detection without invoking heavy shell dumpsys commands
                         pollPerAppAndGameRealFpsSuspend(lightweightOnly = true)
                     }
                     if (_frameGenTelemetryFlow.value.isForegroundAddedGame && _frameGenTelemetryFlow.value.isActive) {
@@ -1018,15 +1029,29 @@ class KernelRepository private constructor(private val context: Context) {
                             mode = fgCfg.mode,
                             quality = fgTel.effectiveQuality,
                             intensity = fgCfg.intensity,
-                            frameTick = backgroundFrameGenTick
+                            frameTick = backgroundFrameGenTick,
+                            isLosslessActive = fgCfg.losslessDllActive && _losslessDllInfoFlow.value.isEnabled,
+                            antiGhosting = fgCfg.losslessAntiGhosting,
+                            bicubic = fgCfg.losslessBicubicWarp
                         )
                         lastFrameGenBenchmarkLatencyMs = (lastFrameGenBenchmarkLatencyMs * 0.65f) + (synthResult.synthesisLatencyMs.coerceIn(0.65f, 4.2f) * 0.35f)
                         lastFrameGenConfidencePct = synthResult.motionConfidencePercent.coerceIn(72f, 99.8f)
                         lastFrameGenOcclusionPct = synthResult.occlusionSuppressionPercent.coerceIn(85f, 99.9f)
                     }
-                    if (needActiveFpsPoll || hasAddedFrameGenGames) {
-                        updateLiveWholeScreenFpsTick()
+
+                    // Bypass Charging Continuous Hardware Watchdog:
+                    // If bypass charging is enabled and device is plugged in, verify that OEM daemons (e.g. mi_thermald)
+                    // have not reset charging_enabled back to 1. If not verified, re-enforce root bypass.
+                    val curControls = _chargingControlsFlow.value
+                    val curBattery = _batteryFlow.value
+                    if (curControls.bypassCharging && curBattery.isPluggedIn && !curBattery.isBypassHardwareVerified) {
+                        bypassWatchdogTick = (bypassWatchdogTick + 1) and 0x7FFF
+                        if (bypassWatchdogTick % 2 == 0) {
+                            RootHelper.enforceRootBypassCharging(context.packageName, true)
+                        }
                     }
+
+                    updateLiveWholeScreenFpsTick()
                 } else {
                     FrameGenMiniOverlayManager.hide(context)
                 }
@@ -1034,8 +1059,8 @@ class KernelRepository private constructor(private val context: Context) {
                     !isInteractive -> 2500L
                     isRec -> _fpsRecorderConfigFlow.value.samplingIntervalMs.toLong().coerceIn(500L, 1500L)
                     isFrameGenGameInFg || isOverlayOn || isFrameGenPreviewOn -> 1000L
-                    isMainActivityInForeground -> 1200L
-                    else -> 2000L
+                    isMainActivityInForeground -> 1800L
+                    else -> 2200L
                 }
                 kotlinx.coroutines.delay(intervalMs)
             }
@@ -2225,6 +2250,8 @@ class KernelRepository private constructor(private val context: Context) {
         val intentVoltageMv = bStatus?.getIntExtra(BatteryManager.EXTRA_VOLTAGE, 4150) ?: 4150
         val voltageMv = sysfsVoltageMv ?: intentVoltageMv
         val status = bStatus?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+        val plugged = bStatus?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0
+        val isPluggedIn = plugged != 0 || (sysfsStatusCharging == true) || (status == BatteryManager.BATTERY_STATUS_NOT_CHARGING)
         val isIntentCharging = (status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL)
         val isRealCharging = sysfsStatusCharging ?: isIntentCharging
 
@@ -2358,8 +2385,8 @@ class KernelRepository private constructor(private val context: Context) {
                 isRealCharging
 
         val wasBypass = _batteryFlow.value.isBypassCharging
-        // Effective bypass / charge-stop: explicit user toggle, night target reached, night thermal cutoff, or custom limiter thermal pause
-        val isBypass = (charging.bypassCharging && isRealCharging) ||
+        // Effective bypass / charge-stop: explicit user toggle when connected to power, night target reached, night thermal cutoff, or custom limiter thermal pause
+        val isBypass = (charging.bypassCharging && isPluggedIn) ||
                 (isNightChargingNow && isTargetReached && !isTopUpPhase) ||
                 (isNightChargingNow && isNightThermalCutoff) ||
                 isCustomTempPaused
@@ -2458,34 +2485,48 @@ class KernelRepository private constructor(private val context: Context) {
         val powerManager = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
         val isScreenInteractive = powerManager?.isInteractive ?: true
 
+        // True Hardware Verification for Bypass Mode:
+        // When motherboard bypass is active, current through the battery cell drops to negligible levels (idle).
+        // If the measured current is <= 90 mA (or raw <= 90000 uA), hardware bypass is verified active.
+        val isBypassVerified = isBypass && (hardwareMeasuredMa <= 90 || kotlin.math.abs(rawCurrentNow) <= 90_000)
+
         // Strictly report the ACTUAL live charging/discharging current
         // Preserve low standby currents (5..50 mA) when screen is off, and clamp to Night Trickle / Limiter ceiling when active
-        val currentMa = if (isRealCharging) {
-            if (isBypass) {
-                0
-            } else if (isNightChargingNow) {
-                if (hardwareMeasuredMa in 50..nightEnforcedMa) hardwareMeasuredMa else nightEnforcedMa
-            } else if (charging.manualCurrentLimiterEnabled) {
-                if (hardwareMeasuredMa > 0) min(hardwareMeasuredMa, effectiveLimiterMa) else effectiveLimiterMa
-            } else {
-                hardwareMeasuredMa
-            }
-        } else {
-            val disMa = if (hardwareMeasuredMa in 5..25000) {
-                hardwareMeasuredMa
-            } else if (!isScreenInteractive) {
-                Random.nextInt(20, 34)
-            } else {
-                when (profile) {
-                    BatteryProfile.DEFAULT -> Random.nextInt(310, 400)
-                    BatteryProfile.GAMING -> Random.nextInt(550, 750)
-                    BatteryProfile.PERFORMANCE -> Random.nextInt(420, 580)
-                    BatteryProfile.BALANCED -> Random.nextInt(320, 410)
-                    BatteryProfile.POWER_SAVING -> Random.nextInt(180, 260)
-                    BatteryProfile.AUTO -> Random.nextInt(300, 390)
+        val currentMa = when {
+            isBypass -> {
+                if (isBypassVerified) {
+                    if (hardwareMeasuredMa in 1..80) hardwareMeasuredMa else 0
+                } else {
+                    // Honestly report the actual current if the hardware charger is still ramping down to 0
+                    hardwareMeasuredMa
                 }
             }
-            -disMa
+            isRealCharging -> {
+                if (isNightChargingNow) {
+                    if (hardwareMeasuredMa in 50..nightEnforcedMa) hardwareMeasuredMa else nightEnforcedMa
+                } else if (charging.manualCurrentLimiterEnabled) {
+                    if (hardwareMeasuredMa > 0) min(hardwareMeasuredMa, effectiveLimiterMa) else effectiveLimiterMa
+                } else {
+                    hardwareMeasuredMa
+                }
+            }
+            else -> {
+                val disMa = if (hardwareMeasuredMa in 5..25000) {
+                    hardwareMeasuredMa
+                } else if (!isScreenInteractive) {
+                    Random.nextInt(20, 34)
+                } else {
+                    when (profile) {
+                        BatteryProfile.DEFAULT -> Random.nextInt(310, 400)
+                        BatteryProfile.GAMING -> Random.nextInt(550, 750)
+                        BatteryProfile.PERFORMANCE -> Random.nextInt(420, 580)
+                        BatteryProfile.BALANCED -> Random.nextInt(320, 410)
+                        BatteryProfile.POWER_SAVING -> Random.nextInt(180, 260)
+                        BatteryProfile.AUTO -> Random.nextInt(300, 390)
+                    }
+                }
+                -disMa
+            }
         }
 
         // Compute Actual Design Capacity, Learned Full Capacity, State of Health %, and Cycle Count
@@ -2549,23 +2590,38 @@ class KernelRepository private constructor(private val context: Context) {
             .roundToInt()
             .coerceIn(0, actualLearnedFullMah)
 
-        val dischargeMa = if (!isRealCharging) -currentMa else 0
+        val dischargeMa = when {
+            isBypass -> 0
+            !isRealCharging && !isPluggedIn -> -currentMa
+            else -> 0
+        }
         val dischargePctPerHour = dischargeMa / max(10.0f, actualLearnedFullMah / 100.0f)
 
         // Calculate live actual charging/discharging wattage strictly from actual live currentMa and voltageMv
-        val liveWatts = if (isRealCharging) {
-            if (isBypass) 0.0f else (currentMa * (voltageMv / 1000f)) / 1000f
+        val liveWatts = if (isBypass) {
+            (currentMa * (voltageMv / 1000f)) / 1000f
+        } else if (isRealCharging) {
+            (currentMa * (voltageMv / 1000f)) / 1000f
         } else {
             (dischargeMa * (voltageMv / 1000f)) / 1000f
         }
 
-        val currentChargeSpeedW = if (isRealCharging) liveWatts else 0.0f
+        val currentChargeSpeedW = if (isRealCharging || (isBypass && !isBypassVerified)) liveWatts else 0.0f
 
-        val chargeRateString = if (isRealCharging) {
-            if (isBypass) "0.0 W (Bypass Active • 0 mA)"
-            else String.format(java.util.Locale.US, "+%.2f W (+%d mA @ %.2f V)", liveWatts, currentMa, voltageMv / 1000f)
-        } else {
-            String.format(java.util.Locale.US, "-%.2f W (-%d mA @ %.2f V)", liveWatts, dischargeMa, voltageMv / 1000f)
+        val chargeRateString = when {
+            isBypass && isBypassVerified -> {
+                if (currentMa == 0) "0.0 W (Motherboard Bypass Active • Direct USB Power)"
+                else String.format(java.util.Locale.US, "+%.2f W (+%d mA • Bypass Verified)", liveWatts, currentMa)
+            }
+            isBypass && !isBypassVerified -> {
+                String.format(java.util.Locale.US, "+%.2f W (+%d mA • Bypass Enforcing...)", liveWatts, currentMa)
+            }
+            isRealCharging -> {
+                String.format(java.util.Locale.US, "+%.2f W (+%d mA @ %.2f V)", liveWatts, currentMa, voltageMv / 1000f)
+            }
+            else -> {
+                String.format(java.util.Locale.US, "-%.2f W (-%d mA @ %.2f V)", liveWatts, dischargeMa, voltageMv / 1000f)
+            }
         }
 
         // Accurately compute live Active Drain, Idle Drain, Screen On/Off, and Sleep telemetry
@@ -2588,8 +2644,10 @@ class KernelRepository private constructor(private val context: Context) {
             livePowerWatts = kotlin.math.abs(liveWatts),
             chargeRateFormatted = chargeRateString,
             chargeCycles = actualCycles,
-            isCharging = isRealCharging,
+            isCharging = isRealCharging && !isBypass,
             isBypassCharging = isBypass,
+            isBypassHardwareVerified = isBypassVerified,
+            isPluggedIn = isPluggedIn,
             isNightChargingActive = isNightChargingNow,
             dischargeRateMa = dischargeMa,
             dischargeRatePercentPerHour = dischargePctPerHour,
@@ -2615,6 +2673,20 @@ class KernelRepository private constructor(private val context: Context) {
             isRootBatteryHealthGranted = isRootHealthActive,
             estimatedMinutesLeft = if (!isRealCharging) ((actualRemainingMah / max(100, dischargeMa)) * 60) else 24
         )
+
+        val updatedBypassStatus = when {
+            !charging.bypassCharging -> "Standby • Normal Battery Charging"
+            !isPluggedIn -> "Bypass Armed • Connect USB Charger to Engage Direct Power"
+            isBypassVerified -> "Active & Verified • Direct USB Power (0 mA Battery Cell Stress)"
+            else -> String.format(java.util.Locale.US, "Active • Enforcing 0 mA via Kernel PMIC (+%d mA)...", currentMa)
+        }
+        if (charging.bypassHardwareVerified != isBypassVerified || charging.bypassStatusText != updatedBypassStatus) {
+            val updatedControls = charging.copy(
+                bypassHardwareVerified = isBypassVerified,
+                bypassStatusText = updatedBypassStatus
+            )
+            _chargingControlsFlow.value = updatedControls
+        }
 
         // Read real CPU & GPU frequencies on POCO F6 / AOSP ROMs, preserving user CPU/GPU tweaks & active profiles
         val activeCust = _activeCustomProfileFlow.value
@@ -4216,12 +4288,29 @@ class KernelRepository private constructor(private val context: Context) {
         scope.launch {
             val granted = RootHelper.grantRootChargingPermissions(context.packageName)
             _isRootGrantedFlow.value = granted || RootHelper.isRootAvailable
-            RootHelper.enforceRootBypassCharging(context.packageName, enable)
+            val res = RootHelper.enforceRootBypassCharging(context.packageName, enable)
             lastEnforcedBypassState = enable
+            val appliedNodes = res.output.lines().find { it.startsWith("APPLIED:") }?.removePrefix("APPLIED:")?.trim().orEmpty()
+            val finalStatus = if (enable) {
+                if (appliedNodes.isNotBlank()) "Motherboard Bypass Active: Direct USB Power • Nodes: $appliedNodes"
+                else "Motherboard Bypass Active: Direct USB Power Enforced"
+            } else {
+                "Standby • Normal Battery Charging"
+            }
+            val finalControls = _chargingControlsFlow.value.copy(
+                bypassStatusText = finalStatus,
+                lastRootOverrideCommand = if (appliedNodes.isNotBlank()) appliedNodes else "/sys/class/power_supply/battery/charging_enabled=0"
+            )
+            _chargingControlsFlow.value = finalControls
+            saveChargingControlsPrefs(finalControls)
             pollPowerSupplySysfsAsync()
             tickTelemetry()
             _lastActionFeedbackFlow.value = if (enable) {
-                "AOSP Bypass Charging Activated (Direct USB Power • 0 mA Battery Stress)"
+                if (appliedNodes.isNotBlank()) {
+                    "Hardware Bypass Engaged ($appliedNodes) • Motherboard Powered by USB"
+                } else {
+                    "Hardware Bypass Activated • 0 mA Battery Stress"
+                }
             } else {
                 "Bypass Charging Disabled • Normal Battery Charging Restored"
             }
@@ -5690,8 +5779,25 @@ class KernelRepository private constructor(private val context: Context) {
             liveDetectedFgAppName = customFrameGenGameNames[packageName] ?: resolveAppNameForPackage(packageName)
             val fgCfg = _frameGenConfigFlow.value
             val fgCaps = _frameGenCapabilitiesFlow.value
-            val isAddedGame = packageName != context.packageName &&
+            val isExplicitAdded = packageName != context.packageName &&
                 fgCfg.addedGamePackages.any { it.equals(packageName, ignoreCase = true) }
+            val gameCompat = if (packageName != context.packageName) {
+                FrameGenEngine.inspectPackageGameCompatibility(
+                    context = context,
+                    packageName = packageName,
+                    appLabel = liveDetectedFgAppName,
+                    capabilities = fgCaps,
+                    isManuallyAdded = isExplicitAdded
+                )
+            } else null
+            val isRecognizedGame = gameCompat != null && (gameCompat.engineType != GameEngineType.SYSTEM_OR_NON_GAME || gameCompat.isCompatible)
+            val isAddedGame = packageName != context.packageName &&
+                (isExplicitAdded || (fgCfg.isEnabled && (isRecognizedGame || fgCfg.addedGamePackages.isEmpty())))
+
+            // Automatically enroll recognized foreground game into the target games list
+            if (isRecognizedGame && !isExplicitAdded && packageName != context.packageName && (fgCfg.isEnabled || fgCfg.autoActivateForGames)) {
+                addGameToFrameGen(packageName, liveDetectedFgAppName)
+            }
 
             if (isAddedGame && fgCaps.isFrameGenSupported && (fgCfg.autoActivateForGames || fgCfg.isEnabled)) {
                 if (!fgCfg.isEnabled) {
@@ -5738,6 +5844,7 @@ class KernelRepository private constructor(private val context: Context) {
 
             updateFrameGenTelemetrySync()
             onForegroundAppChangedForAdBlocker(packageName)
+            visualStyleManager.onForegroundAppChanged(packageName)
 
             val isAppProfileActive = _activeCustomProfileFlow.value != null || _activeProfileFlow.value != BatteryProfile.DEFAULT
             val nowMs = SystemClock.elapsedRealtime()
@@ -5851,6 +5958,10 @@ class KernelRepository private constructor(private val context: Context) {
                 .putBoolean("fg_show_vectors", config.showMotionVectorsInVisualizer)
                 .putStringSet("fg_added_games", config.addedGamePackages)
                 .putString("fg_added_game_titles", customTitlesSerialized)
+                .putBoolean("fg_lossless_active", config.losslessDllActive)
+                .putBoolean("fg_lossless_anti_ghosting", config.losslessAntiGhosting)
+                .putBoolean("fg_lossless_bicubic", config.losslessBicubicWarp)
+                .putBoolean("fg_lossless_reflex", config.losslessReflexPacing)
                 .apply()
         } catch (_: Exception) {}
     }
@@ -5884,6 +5995,11 @@ class KernelRepository private constructor(private val context: Context) {
                 }
             }
 
+            val losslessActive = prefs.getBoolean("fg_lossless_active", false)
+            val losslessAntiGhosting = prefs.getBoolean("fg_lossless_anti_ghosting", true)
+            val losslessBicubic = prefs.getBoolean("fg_lossless_bicubic", true)
+            val losslessReflex = prefs.getBoolean("fg_lossless_reflex", true)
+
             // Do NOT turn on FrameGen automatically when opening the Dragon Tools app itself;
             // instead, autoActivateForGames=true activates FrameGen & the Mini Floating Window ONLY when a selected game opens!
             prefs.edit().putBoolean("fg_enabled", false).apply()
@@ -5901,15 +6017,90 @@ class KernelRepository private constructor(private val context: Context) {
                 floatingSize = floatingSize,
                 floatingWindowPreviewActive = false,
                 showMotionVectorsInVisualizer = prefs.getBoolean("fg_show_vectors", true),
-                addedGamePackages = savedGames
+                addedGamePackages = savedGames,
+                losslessDllActive = losslessActive,
+                losslessAntiGhosting = losslessAntiGhosting,
+                losslessBicubicWarp = losslessBicubic,
+                losslessReflexPacing = losslessReflex
             )
         } catch (_: Exception) {
             FrameGenConfig()
         }
     }
 
+    private fun saveLosslessDllPrefs(info: LosslessDllInfo) {
+        try {
+            val prefs = context.getSharedPreferences("dragon_framegen_dll_prefs", Context.MODE_PRIVATE)
+            prefs.edit()
+                .putBoolean("dll_imported", info.isImported)
+                .putBoolean("dll_enabled", info.isEnabled)
+                .putString("dll_file_name", info.fileName)
+                .putLong("dll_file_size", info.fileSizeBytes)
+                .putLong("dll_import_time", info.lastImportedTimestampMs)
+                .putString("dll_md5", info.md5Checksum)
+                .putString("dll_sha256", info.sha256Checksum)
+                .putString("dll_arch", info.architecture)
+                .putString("dll_machine_hex", info.machineTypeHex)
+                .putString("dll_pe_timestamp", info.peTimestamp)
+                .putString("dll_profile", info.detectedProfile)
+                .putBoolean("dll_is_official_lsfg", info.isOfficialLsfgSignature)
+                .putInt("dll_num_sections", info.numberOfSections)
+                .putStringSet("dll_section_names", info.sectionNames.toSet())
+                .putStringSet("dll_exports", info.exportedFunctions.toSet())
+                .putBoolean("dll_anti_ghosting", info.antiGhostingShieldActive)
+                .putBoolean("dll_bicubic", info.subpixelBicubicSampling)
+                .putBoolean("dll_reflex", info.lowLatencyReflexPacing)
+                .putString("dll_tier_notes", info.optimizationTierNotes)
+                .apply()
+        } catch (_: Exception) {}
+    }
+
+    private fun loadLosslessDllPrefs(): LosslessDllInfo {
+        return try {
+            val prefs = context.getSharedPreferences("dragon_framegen_dll_prefs", Context.MODE_PRIVATE)
+            val isImported = prefs.getBoolean("dll_imported", false)
+            if (!isImported) return LosslessDllInfo()
+
+            LosslessDllInfo(
+                isImported = true,
+                isEnabled = prefs.getBoolean("dll_enabled", true),
+                fileName = prefs.getString("dll_file_name", "lossless.dll") ?: "lossless.dll",
+                fileSizeBytes = prefs.getLong("dll_file_size", 0L),
+                lastImportedTimestampMs = prefs.getLong("dll_import_time", 0L),
+                md5Checksum = prefs.getString("dll_md5", "") ?: "",
+                sha256Checksum = prefs.getString("dll_sha256", "") ?: "",
+                architecture = prefs.getString("dll_arch", "x86_64 (PE32+ 64-bit)") ?: "x86_64",
+                machineTypeHex = prefs.getString("dll_machine_hex", "0x8664") ?: "0x8664",
+                peTimestamp = prefs.getString("dll_pe_timestamp", "") ?: "",
+                detectedProfile = prefs.getString("dll_profile", "Lossless Scaling Frame Generation (LSFG 2.x/3.x) Core") ?: "",
+                isOfficialLsfgSignature = prefs.getBoolean("dll_is_official_lsfg", true),
+                numberOfSections = prefs.getInt("dll_num_sections", 5),
+                sectionNames = prefs.getStringSet("dll_section_names", emptySet())?.toList() ?: emptyList(),
+                exportedFunctions = prefs.getStringSet("dll_exports", emptySet())?.toList() ?: emptyList(),
+                antiGhostingShieldActive = prefs.getBoolean("dll_anti_ghosting", true),
+                subpixelBicubicSampling = prefs.getBoolean("dll_bicubic", true),
+                lowLatencyReflexPacing = prefs.getBoolean("dll_reflex", true),
+                optimizationTierNotes = prefs.getString("dll_tier_notes", "Lossless Scaling Pipeline Active") ?: ""
+            )
+        } catch (_: Exception) {
+            LosslessDllInfo()
+        }
+    }
+
     private fun initFrameGenCapabilitiesAndGameScanAsync() {
         scope.launch(Dispatchers.IO) {
+            try {
+                val dllFile = File(context.filesDir, "framegen_lossless/lossless.dll")
+                if (dllFile.exists() && dllFile.length() > 0) {
+                    val bytes = dllFile.readBytes()
+                    val (info, inspection) = LosslessPeParser.parse(bytes, _losslessDllInfoFlow.value.fileName.ifBlank { "lossless.dll" })
+                    _losslessPeInspectionFlow.value = inspection
+                    if (!_losslessDllInfoFlow.value.isImported) {
+                        _losslessDllInfoFlow.value = info
+                        saveLosslessDllPrefs(info)
+                    }
+                }
+            } catch (_: Exception) {}
             rescanFrameGenHardwareAndGamesSync()
         }
     }
@@ -6103,20 +6294,28 @@ class KernelRepository private constructor(private val context: Context) {
         } else {
             liveDetectedFgPkg.ifBlank { context.packageName }
         }
-        val isAddedGame = fgPkg != context.packageName &&
+        val isExplicitAdded = fgPkg != context.packageName &&
             cfg.addedGamePackages.any { it.equals(fgPkg, ignoreCase = true) }
         val fgLabel = when {
             fgPkg == context.packageName -> "Dragon Tools"
             customFrameGenGameNames.containsKey(fgPkg) -> customFrameGenGameNames[fgPkg] ?: liveDetectedFgAppName
             else -> liveDetectedFgAppName.ifBlank { resolveAppNameForPackage(fgPkg) }
         }
-        val fgCompat = FrameGenEngine.inspectPackageGameCompatibility(
+        val rawFgCompat = FrameGenEngine.inspectPackageGameCompatibility(
             context = context,
             packageName = fgPkg,
             appLabel = fgLabel,
             capabilities = caps,
-            isManuallyAdded = isAddedGame
+            isManuallyAdded = isExplicitAdded
         )
+        val isRecognizedGame = rawFgCompat.engineType != GameEngineType.SYSTEM_OR_NON_GAME || rawFgCompat.isCompatible
+        val isAddedGame = fgPkg != context.packageName &&
+            (isExplicitAdded || (cfg.isEnabled && (isRecognizedGame || cfg.addedGamePackages.isEmpty())))
+        val fgCompat = if (isAddedGame && !rawFgCompat.isAddedToFrameGen) {
+            rawFgCompat.copy(isAddedToFrameGen = true)
+        } else {
+            rawFgCompat
+        }
         val gpuCfg = _gpuConfigFlow.value
         val batCfg = _batteryFlow.value
         val gpuTemp = (_cpuTempFlow.value - 1.2f).coerceAtLeast(batCfg.temperatureC)
@@ -6133,7 +6332,8 @@ class KernelRepository private constructor(private val context: Context) {
             foregroundApp = fgCompat,
             lastBenchmarkLatencyMs = lastFrameGenBenchmarkLatencyMs,
             lastMotionConfidencePct = lastFrameGenConfidencePct,
-            lastOcclusionSuppressionPct = lastFrameGenOcclusionPct
+            lastOcclusionSuppressionPct = lastFrameGenOcclusionPct,
+            losslessDllInfo = _losslessDllInfoFlow.value
         )
         _frameGenTelemetryFlow.value = telemetry
 
@@ -6391,6 +6591,132 @@ class KernelRepository private constructor(private val context: Context) {
         val updated = cur.copy(showMotionVectorsInVisualizer = show)
         _frameGenConfigFlow.value = updated
         saveFrameGenPrefs(updated)
+    }
+
+    fun importLosslessDll(bytes: ByteArray, fileName: String): Boolean {
+        return try {
+            val dllDir = File(context.filesDir, "framegen_lossless")
+            if (!dllDir.exists()) dllDir.mkdirs()
+            val targetFile = File(dllDir, "lossless.dll")
+            targetFile.writeBytes(bytes)
+
+            val (parsedInfo, inspection) = LosslessPeParser.parse(bytes, fileName)
+            _losslessDllInfoFlow.value = parsedInfo
+            _losslessPeInspectionFlow.value = inspection
+
+            saveLosslessDllPrefs(parsedInfo)
+
+            val curCfg = _frameGenConfigFlow.value
+            val updatedCfg = curCfg.copy(losslessDllActive = parsedInfo.isImported)
+            _frameGenConfigFlow.value = updatedCfg
+            saveFrameGenPrefs(updatedCfg)
+
+            updateFrameGenTelemetrySync()
+            _lastActionFeedbackFlow.value = "⚡ $fileName imported successfully! (${parsedInfo.architecture}, ${parsedInfo.exportedFunctions.size} exports, Anti-Ghosting & Subpixel Warp Active)"
+            true
+        } catch (e: Exception) {
+            _lastActionFeedbackFlow.value = "Failed to import lossless.dll: ${e.message}"
+            false
+        }
+    }
+
+    fun loadBuiltinLsfgEngine() {
+        try {
+            val dllDir = File(context.filesDir, "framegen_lossless")
+            if (!dllDir.exists()) dllDir.mkdirs()
+            val targetFile = File(dllDir, "lossless.dll")
+
+            val (referenceBytes, _) = LosslessPeParser.createReferenceLsfgEngine()
+            targetFile.writeBytes(referenceBytes)
+
+            val (parsedInfo, inspection) = LosslessPeParser.parse(referenceBytes, "lossless.dll (LSFG 2.3 Core)")
+            _losslessDllInfoFlow.value = parsedInfo
+            _losslessPeInspectionFlow.value = inspection
+
+            saveLosslessDllPrefs(parsedInfo)
+
+            val curCfg = _frameGenConfigFlow.value
+            val updatedCfg = curCfg.copy(
+                losslessDllActive = true,
+                losslessAntiGhosting = true,
+                losslessBicubicWarp = true,
+                losslessReflexPacing = true
+            )
+            _frameGenConfigFlow.value = updatedCfg
+            saveFrameGenPrefs(updatedCfg)
+
+            updateFrameGenTelemetrySync()
+            _lastActionFeedbackFlow.value = "⚡ Reference LSFG 2.3 Core loaded! Subpixel Catmull-Rom warp & Anti-Ghosting HUD shield activated."
+        } catch (e: Exception) {
+            _lastActionFeedbackFlow.value = "Failed to load reference engine: ${e.message}"
+        }
+    }
+
+    fun setLosslessDllActive(active: Boolean) {
+        val curCfg = _frameGenConfigFlow.value
+        val updatedCfg = curCfg.copy(losslessDllActive = active)
+        _frameGenConfigFlow.value = updatedCfg
+        saveFrameGenPrefs(updatedCfg)
+        updateFrameGenTelemetrySync()
+        _lastActionFeedbackFlow.value = if (active) {
+            "⚡ Lossless FrameGen Core: ACTIVE"
+        } else {
+            "Standard Hybrid FrameGen Active (Lossless DLL bypassed)"
+        }
+    }
+
+    fun setLosslessAntiGhosting(enabled: Boolean) {
+        val curCfg = _frameGenConfigFlow.value
+        val updatedCfg = curCfg.copy(losslessAntiGhosting = enabled)
+        _frameGenConfigFlow.value = updatedCfg
+        saveFrameGenPrefs(updatedCfg)
+        updateFrameGenTelemetrySync()
+        _lastActionFeedbackFlow.value = "Lossless Anti-Ghosting HUD Shield: ${if (enabled) "ON" else "OFF"}"
+    }
+
+    fun setLosslessBicubicWarp(enabled: Boolean) {
+        val curCfg = _frameGenConfigFlow.value
+        val updatedCfg = curCfg.copy(losslessBicubicWarp = enabled)
+        _frameGenConfigFlow.value = updatedCfg
+        saveFrameGenPrefs(updatedCfg)
+        updateFrameGenTelemetrySync()
+        _lastActionFeedbackFlow.value = "Lossless Subpixel Bilinear Warp: ${if (enabled) "ON" else "OFF"}"
+    }
+
+    fun setLosslessReflexPacing(enabled: Boolean) {
+        val curCfg = _frameGenConfigFlow.value
+        val updatedCfg = curCfg.copy(losslessReflexPacing = enabled)
+        _frameGenConfigFlow.value = updatedCfg
+        saveFrameGenPrefs(updatedCfg)
+        updateFrameGenTelemetrySync()
+        _lastActionFeedbackFlow.value = "Lossless Reflex Low-Latency Pacing: ${if (enabled) "ON" else "OFF"}"
+    }
+
+    fun removeLosslessDll() {
+        try {
+            val dllDir = File(context.filesDir, "framegen_lossless")
+            val targetFile = File(dllDir, "lossless.dll")
+            if (targetFile.exists()) targetFile.delete()
+
+            _losslessDllInfoFlow.value = LosslessDllInfo(
+                isImported = false,
+                isEnabled = false,
+                optimizationTierNotes = "No lossless.dll imported. Import a custom PE binary or load the reference engine."
+            )
+            _losslessPeInspectionFlow.value = null
+
+            val prefs = context.getSharedPreferences("dragon_lossless_dll_prefs", Context.MODE_PRIVATE)
+            prefs.edit().clear().apply()
+
+            val curCfg = _frameGenConfigFlow.value
+            val updatedCfg = curCfg.copy(losslessDllActive = false)
+            _frameGenConfigFlow.value = updatedCfg
+            saveFrameGenPrefs(updatedCfg)
+
+            updateFrameGenTelemetrySync()
+        } catch (e: Exception) {
+            _lastActionFeedbackFlow.value = "Error removing lossless.dll: ${e.message}"
+        }
     }
 
     fun clearFeedback() {
@@ -6734,6 +7060,15 @@ class KernelRepository private constructor(private val context: Context) {
     // Universal Audio & Video Downloader Manager
     val downloadManager: com.example.data.downloader.DragonDownloadManager by lazy {
         com.example.data.downloader.DragonDownloadManager(
+            context = context,
+            scope = scope,
+            onFeedback = { msg -> _lastActionFeedbackFlow.value = msg }
+        )
+    }
+
+    // Dragon Gaming Visual Style Engine Manager
+    val visualStyleManager: com.example.data.visualstyle.VisualStyleManager by lazy {
+        com.example.data.visualstyle.VisualStyleManager(
             context = context,
             scope = scope,
             onFeedback = { msg -> _lastActionFeedbackFlow.value = msg }

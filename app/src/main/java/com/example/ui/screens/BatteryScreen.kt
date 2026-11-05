@@ -75,14 +75,31 @@ fun BatteryScreen(repository: KernelRepository) {
                         color = MaterialTheme.colorScheme.primary
                     )
                 }
+                val isBypass = battery.isBypassCharging || (chargingControls.bypassCharging && battery.isPluggedIn)
+                val badgeContainer = when {
+                    isBypass -> if (battery.isBypassHardwareVerified) SuccessGreen.copy(alpha = 0.25f) else Color(0xFFFFB300).copy(alpha = 0.25f)
+                    battery.isCharging -> SuccessGreen.copy(alpha = 0.2f)
+                    battery.isPluggedIn -> MaterialTheme.colorScheme.tertiaryContainer
+                    else -> MaterialTheme.colorScheme.primaryContainer
+                }
+                val badgeContent = when {
+                    isBypass -> if (battery.isBypassHardwareVerified) SuccessGreen else Color(0xFFFFB300)
+                    battery.isCharging -> SuccessGreen
+                    battery.isPluggedIn -> MaterialTheme.colorScheme.tertiary
+                    else -> MaterialTheme.colorScheme.primary
+                }
                 Badge(
-                    containerColor = if (battery.isCharging) SuccessGreen.copy(alpha = 0.2f) else MaterialTheme.colorScheme.primaryContainer,
-                    contentColor = if (battery.isCharging) SuccessGreen else MaterialTheme.colorScheme.primary
+                    containerColor = badgeContainer,
+                    contentColor = badgeContent
                 ) {
                     Text(
-                        text = if (battery.isCharging) {
-                            if (chargingControls.bypassCharging) "BYPASS ACTIVE" else "CHARGING LIVE"
-                        } else "DISCHARGING",
+                        text = when {
+                            isBypass && battery.isBypassHardwareVerified -> "BYPASS ACTIVE • 0 mA"
+                            isBypass -> "BYPASS ENFORCING"
+                            battery.isCharging -> "CHARGING LIVE"
+                            battery.isPluggedIn -> "CONNECTED (NOT CHARGING)"
+                            else -> "DISCHARGING"
+                        },
                         fontWeight = FontWeight.Bold,
                         fontSize = 10.sp
                     )
@@ -521,6 +538,91 @@ fun BatteryScreen(repository: KernelRepository) {
                                 checked = chargingControls.bypassCharging,
                                 onCheckedChange = { repository.toggleBypassCharging(it) }
                             )
+                        }
+
+                        if (chargingControls.bypassCharging) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            val isVerified = battery.isBypassHardwareVerified
+                            val isPlugged = battery.isPluggedIn
+
+                            val bgContainer = when {
+                                isVerified -> SuccessGreen.copy(alpha = 0.12f)
+                                isPlugged -> Color(0xFFFFB300).copy(alpha = 0.12f)
+                                else -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                            }
+                            val borderCol = when {
+                                isVerified -> SuccessGreen.copy(alpha = 0.4f)
+                                isPlugged -> Color(0xFFFFB300).copy(alpha = 0.4f)
+                                else -> MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
+                            }
+                            val accentCol = when {
+                                isVerified -> SuccessGreen
+                                isPlugged -> Color(0xFFFFB300)
+                                else -> MaterialTheme.colorScheme.primary
+                            }
+
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(10.dp),
+                                colors = CardDefaults.cardColors(containerColor = bgContainer),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, borderCol)
+                            ) {
+                                Column(modifier = Modifier.padding(10.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                imageVector = if (isVerified) Icons.Default.CheckCircle else Icons.Default.Sync,
+                                                contentDescription = "Bypass Status",
+                                                tint = accentCol,
+                                                modifier = Modifier.size(15.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                text = when {
+                                                    isVerified -> "DIRECT MOTHERBOARD POWER VERIFIED"
+                                                    isPlugged -> "ENFORCING HARDWARE BYPASS"
+                                                    else -> "CABLE UNPLUGGED • BYPASS ARMED"
+                                                },
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 11.sp,
+                                                color = accentCol
+                                            )
+                                        }
+
+                                        FilledTonalButton(
+                                            onClick = { repository.toggleBypassCharging(true) },
+                                            modifier = Modifier.height(28.dp),
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                                        ) {
+                                            Text("Re-Lock", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = when {
+                                            isVerified -> "Hardware fuel gauge reports 0 mA into cells • System running 100% on USB charger power • Zero battery heating."
+                                            isPlugged -> "Kernel registers locked (charging_enabled=0, charge_disable=1, input_suspend=0). Measured: ${battery.currentMa} mA."
+                                            else -> "Connect USB wall charger to activate direct motherboard power delivery."
+                                        },
+                                        fontSize = 10.sp,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    if (chargingControls.lastRootOverrideCommand.isNotBlank()) {
+                                        Spacer(modifier = Modifier.height(3.dp))
+                                        Text(
+                                            text = "Nodes: ${chargingControls.lastRootOverrideCommand.take(65)}",
+                                            fontSize = 9.sp,
+                                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }

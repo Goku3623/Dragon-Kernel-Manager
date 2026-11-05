@@ -359,71 +359,153 @@ object RootHelper {
 
         val script = """
             applied_nodes=""
-            # 1. Standard input_suspend / charge_disable nodes (1 = bypass/suspend, 0 = normal charging)
-            for node in \
+
+            # 1. CRITICAL: Keep USB Input (VBUS) Power Active!
+            # input_suspend must NEVER be 1 in bypass mode, because suspending input cuts off the charger completely,
+            # which forces the phone to discharge and drain from the battery!
+            # Setting input_suspend to 0 ensures external wall power flows directly to the system motherboard (VSYS).
+            for in_node in \
                 /sys/class/power_supply/battery/input_suspend \
+                /sys/class/power_supply/usb/input_suspend \
+                /sys/class/power_supply/main/input_suspend \
+                /sys/class/power_supply/bms/input_suspend \
+                /sys/class/power_supply/google_charger/input_suspend \
+                /sys/class/qcom-battery/input_suspend \
+                /sys/devices/platform/soc/soc:qcom,pmic_glink/soc:qcom,pmic_glink:qcom,ucsi/power_supply/battery/input_suspend \
+                /sys/devices/platform/soc/soc:google,charger/input_suspend \
+                /sys/kernel/debug/google_charger/input_suspend \
+                /sys/kernel/debug/google_charger/chg_suspend \
+                /sys/class/power_supply/mtk-charger/input_suspend \
+                /sys/class/power_supply/sec-charger/input_suspend; do
+                if [ -e "${'$'}in_node" ]; then
+                    chattr -i "${'$'}in_node" 2>/dev/null || true
+                    chmod 0666 "${'$'}in_node" 2>/dev/null || true
+                    echo 0 > "${'$'}in_node" 2>/dev/null || true
+                    chmod 0444 "${'$'}in_node" 2>/dev/null || true
+                fi
+            done
+
+            # 2. Disable battery charging current path (0 = charging disabled, 1 = normal charging)
+            # Supported: Qualcomm, MediaTek, Samsung, Xiaomi, OnePlus/Oppo, Asus ROG, Google Pixel
+            for chg_node in \
+                /sys/class/power_supply/battery/charging_enabled \
+                /sys/class/power_supply/battery/battery_charging_enabled \
+                /sys/class/power_supply/battery/mmi_charging_enable \
+                /sys/class/power_supply/battery/charging_switch \
+                /sys/class/power_supply/bms/charging_enabled \
+                /sys/class/power_supply/main/charging_enabled \
+                /sys/class/power_supply/usb/charging_enabled \
+                /sys/class/qcom-battery/charging_enabled \
+                /sys/class/power_supply/mtk-charger/charging_enabled \
+                /sys/class/power_supply/sec-charger/charging_enabled \
+                /sys/devices/platform/soc/soc:qcom,pmic_glink/soc:qcom,pmic_glink:qcom,ucsi/power_supply/battery/charging_enabled \
+                /sys/devices/platform/mtk-charger/power_supply/battery/charging_enabled \
+                /sys/devices/platform/charger/charging_enabled \
+                /sys/class/power_supply/battery/device/enable_charging; do
+                if [ -e "${'$'}chg_node" ]; then
+                    chattr -i "${'$'}chg_node" 2>/dev/null || true
+                    chmod 0666 "${'$'}chg_node" 2>/dev/null || true
+                    echo $enabledFlag > "${'$'}chg_node" 2>/dev/null && applied_nodes="${'$'}applied_nodes ${'$'}(basename "${'$'}chg_node")=$enabledFlag"
+                    chmod $lockMode "${'$'}chg_node" 2>/dev/null || true
+                fi
+            done
+
+            # 3. Direct charge disable, slate mode, and battery idle nodes (1 = bypass active, 0 = normal)
+            for dis_node in \
                 /sys/class/power_supply/battery/charge_disable \
                 /sys/class/power_supply/battery/op_disable_charge \
                 /sys/class/power_supply/battery/batt_slate_mode \
                 /sys/class/power_supply/battery/store_mode \
                 /sys/class/power_supply/battery/charging_call_state \
-                /sys/class/power_supply/bms/input_suspend \
-                /sys/class/power_supply/main/input_suspend \
-                /sys/class/power_supply/usb/Suspend_ichg \
-                /sys/class/power_supply/usb/input_suspend \
-                /sys/class/power_supply/google_charger/input_suspend \
-                /sys/class/qcom-battery/input_suspend \
-                /sys/devices/platform/battery/charging_call_state \
-                /sys/devices/platform/soc/soc:qcom,pmic_glink/soc:qcom,pmic_glink:qcom,ucsi/power_supply/battery/input_suspend \
-                /sys/devices/platform/soc/soc:qcom,pmic_glink/soc:qcom,pmic_glink:qcom,ucsi/power_supply/battery/charge_disable \
-                /sys/devices/platform/soc/soc:google,charger/input_suspend \
-                /sys/kernel/debug/google_charger/input_suspend \
-                /sys/kernel/debug/google_charger/chg_suspend \
-                /sys/class/power_supply/mtk-charger/input_suspend \
-                /sys/class/power_supply/sec-charger/input_suspend \
-                /sys/class/power_supply/wireless/input_suspend; do
-                if [ -e "${'$'}node" ]; then
-                    chattr -i "${'$'}node" 2>/dev/null || true
-                    chmod 0666 "${'$'}node" 2>/dev/null || true
-                    echo $suspendFlag > "${'$'}node" 2>/dev/null && applied_nodes="${'$'}applied_nodes ${'$'}(basename "${'$'}node")=$suspendFlag"
-                    chmod $lockMode "${'$'}node" 2>/dev/null || true
+                /sys/class/power_supply/battery/device/charging_suspend \
+                /sys/devices/platform/soc/soc:qcom,pmic_glink/soc:qcom,pmic_glink:qcom,ucsi/power_supply/battery/charge_disable; do
+                if [ -e "${'$'}dis_node" ]; then
+                    chattr -i "${'$'}dis_node" 2>/dev/null || true
+                    chmod 0666 "${'$'}dis_node" 2>/dev/null || true
+                    echo $suspendFlag > "${'$'}dis_node" 2>/dev/null && applied_nodes="${'$'}applied_nodes ${'$'}(basename "${'$'}dis_node")=$suspendFlag"
+                    chmod $lockMode "${'$'}dis_node" 2>/dev/null || true
                 fi
             done
 
-            # 2. Inverted charging_enabled nodes (0 = bypass/suspend, 1 = normal charging)
-            for inv_node in \
-                /sys/class/power_supply/battery/charging_enabled \
-                /sys/class/power_supply/battery/battery_charging_enabled \
-                /sys/class/power_supply/battery/mmi_charging_enable \
-                /sys/class/power_supply/bms/charging_enabled \
-                /sys/class/power_supply/main/charging_enabled \
-                /sys/class/power_supply/usb/charging_enabled \
-                /sys/class/qcom-battery/charging_enabled \
-                /sys/devices/platform/soc/soc:qcom,pmic_glink/soc:qcom,pmic_glink:qcom,ucsi/power_supply/battery/charging_enabled \
-                /sys/class/power_supply/mtk-charger/charging_enabled \
-                /sys/class/power_supply/sec-charger/charging_enabled \
-                /sys/class/power_supply/battery/charging_switch; do
-                if [ -e "${'$'}inv_node" ]; then
-                    chattr -i "${'$'}inv_node" 2>/dev/null || true
-                    chmod 0666 "${'$'}inv_node" 2>/dev/null || true
-                    echo $enabledFlag > "${'$'}inv_node" 2>/dev/null && applied_nodes="${'$'}applied_nodes ${'$'}(basename "${'$'}inv_node")=$enabledFlag"
-                    chmod $lockMode "${'$'}inv_node" 2>/dev/null || true
+            # 4. Qualcomm PMIC votable framework (CHG_DISABLE force_val)
+            for v_node in \
+                /sys/kernel/debug/pmic-votable/CHG_DISABLE/force_val \
+                /sys/kernel/debug/pmic-votable/CHG_DISABLE/force_active; do
+                if [ -e "${'$'}v_node" ]; then
+                    echo $suspendFlag > "${'$'}v_node" 2>/dev/null && applied_nodes="${'$'}applied_nodes votable:${'$'}(basename "${'$'}v_node")=$suspendFlag"
                 fi
             done
 
-            # 3. Skip debugfs pmic-votable writes to prevent GKI kernel spinlock panics
-
-            # 4. Android AOSP Framework Battery Service Override
+            # 5. Hardware Constant Charge Current Clamp (Kernel Driver Level Fallback)
+            # If a vendor kernel prevents writing 0 to charging_enabled, clamping battery fast charge current to 0 uA
+            # stops all current into battery cells while USB input current limit remains at 2.5A-3A.
             if [ "$suspendFlag" = "1" ]; then
-                dumpsys battery unplug 2>/dev/null || cmd battery unplug 2>/dev/null || true
-                dumpsys battery set status 1 2>/dev/null || cmd battery set status 1 2>/dev/null || true
+                for cur_node in \
+                    /sys/class/power_supply/battery/constant_charge_current_max \
+                    /sys/class/power_supply/battery/constant_charge_current \
+                    /sys/class/power_supply/battery/charge_control_limit; do
+                    if [ -e "${'$'}cur_node" ]; then
+                        chattr -i "${'$'}cur_node" 2>/dev/null || true
+                        chmod 0666 "${'$'}cur_node" 2>/dev/null || true
+                        echo 0 > "${'$'}cur_node" 2>/dev/null && applied_nodes="${'$'}applied_nodes ${'$'}(basename "${'$'}cur_node")=0"
+                        chmod 0444 "${'$'}cur_node" 2>/dev/null || true
+                    fi
+                done
+                # Keep USB input limit generous so USB provides all power needed for CPU/GPU/display:
+                for usb_limit in \
+                    /sys/class/power_supply/usb/current_max \
+                    /sys/class/power_supply/usb/input_current_limit; do
+                    if [ -e "${'$'}usb_limit" ]; then
+                        chmod 0666 "${'$'}usb_limit" 2>/dev/null || true
+                        echo 3000000 > "${'$'}usb_limit" 2>/dev/null || true
+                    fi
+                done
             else
-                dumpsys battery reset 2>/dev/null || cmd battery reset 2>/dev/null || true
+                # Restore charging current on bypass disable
+                for cur_node in \
+                    /sys/class/power_supply/battery/constant_charge_current_max \
+                    /sys/class/power_supply/battery/constant_charge_current \
+                    /sys/class/power_supply/battery/charge_control_limit; do
+                    if [ -e "${'$'}cur_node" ]; then
+                        chattr -i "${'$'}cur_node" 2>/dev/null || true
+                        chmod 0666 "${'$'}cur_node" 2>/dev/null || true
+                        echo 20000000 > "${'$'}cur_node" 2>/dev/null || true
+                    fi
+                done
             fi
 
-            # 5. Set persist properties for vendor charger HAL
+            # 6. Google Pixel (Android 14/15/16) Power Supply Charge Control
+            for pix_node in \
+                /sys/devices/platform/google,battery/power_supply/battery/charge_control_limit \
+                /sys/class/power_supply/battery/charge_control_limit; do
+                if [ -e "${'$'}pix_node" ]; then
+                    chmod 0666 "${'$'}pix_node" 2>/dev/null || true
+                    if [ "$suspendFlag" = "1" ]; then
+                        echo 0 > "${'$'}pix_node" 2>/dev/null && applied_nodes="${'$'}applied_nodes ${'$'}(basename "${'$'}pix_node")=0"
+                    else
+                        echo 1 > "${'$'}pix_node" 2>/dev/null || true
+                    fi
+                fi
+            done
+
+            # 7. Vendor persistent properties for OEM Charger HALs (Xiaomi, Samsung, Asus, OnePlus, Qualcomm)
             setprop persist.sys.charging.bypass $suspendFlag 2>/dev/null || true
             setprop persist.vendor.charging.bypass $suspendFlag 2>/dev/null || true
+            setprop vendor.thermal.charging.bypass $suspendFlag 2>/dev/null || true
+            setprop persist.sys.game.bypass_charging $suspendFlag 2>/dev/null || true
+            setprop sys.battery.charging_disabled $suspendFlag 2>/dev/null || true
+            setprop vendor.battery.charge_disable $suspendFlag 2>/dev/null || true
+            setprop persist.vendor.asus.bypass_charging $suspendFlag 2>/dev/null || true
+
+            # 8. Android AOSP Framework Battery Service Coordination
+            # Keep AC connected (ac 1) so Android framework knows external power is present,
+            # and set status to 4 (BATTERY_STATUS_NOT_CHARGING) which is the official AOSP bypass status!
+            if [ "$suspendFlag" = "1" ]; then
+                cmd battery set ac 1 2>/dev/null || dumpsys battery set ac 1 2>/dev/null || true
+                cmd battery set status 4 2>/dev/null || dumpsys battery set status 4 2>/dev/null || true
+            else
+                cmd battery reset 2>/dev/null || dumpsys battery reset 2>/dev/null || true
+            fi
 
             echo "APPLIED:${'$'}applied_nodes"
         """.trimIndent()

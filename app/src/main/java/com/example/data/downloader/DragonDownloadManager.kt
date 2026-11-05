@@ -20,7 +20,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -61,7 +66,11 @@ class DragonDownloadManager(
     private val _backendUrlFlow = MutableStateFlow(prefs.getString("custom_backend_url", "") ?: "")
     val backendUrlFlow: StateFlow<String> = _backendUrlFlow.asStateFlow()
 
+    private val _activeBatchSessionFlow = MutableStateFlow<BatchSession?>(null)
+    val activeBatchSessionFlow: StateFlow<BatchSession?> = _activeBatchSessionFlow.asStateFlow()
+
     private val activeJobs = ConcurrentHashMap<String, Job>()
+    private var activeBatchJob: Job? = null
 
     init {
         loadPersistedTasks()
@@ -109,7 +118,11 @@ class DragonDownloadManager(
         }
     }
 
-    fun startDownload(mediaInfo: MediaInfo, format: MediaFormatOption): String {
+    fun startDownload(
+        mediaInfo: MediaInfo,
+        format: MediaFormatOption,
+        batchSessionId: String? = null
+    ): String {
         val taskId = UUID.randomUUID().toString()
         val ext = format.container.lowercase(Locale.US).ifBlank { if (format.isAudioOnly) "m4a" else "mp4" }
         val mimeType = when (ext) {
@@ -155,7 +168,8 @@ class DragonDownloadManager(
             stage = initialStage,
             progress = 0.02f,
             totalBytes = estimatedTotal,
-            isTotalSizeEstimated = format.isEstimatedSize || estimatedTotal <= 0L
+            isTotalSizeEstimated = format.isEstimatedSize || estimatedTotal <= 0L,
+            batchSessionId = batchSessionId
         )
 
         _tasksFlow.value = listOf(newTask) + _tasksFlow.value
@@ -1399,6 +1413,7 @@ class DragonDownloadManager(
                     put("streamUrl", t.formatOption.streamUrl)
                     put("errorMessage", t.errorMessage ?: "")
                     put("createdAtMs", t.createdAtMs)
+                    put("batchSessionId", t.batchSessionId ?: "")
                 }
                 arr.put(obj)
             }
@@ -1462,11 +1477,283 @@ class DragonDownloadManager(
                         verifiedDuration = obj.optString("verifiedDuration", "").ifBlank { null },
                         verifiedCodec = obj.optString("verifiedCodec", "").ifBlank { null },
                         errorMessage = obj.optString("errorMessage", "").ifBlank { null },
-                        createdAtMs = obj.optLong("createdAtMs", System.currentTimeMillis())
+                        createdAtMs = obj.optLong("createdAtMs", System.currentTimeMillis()),
+                        batchSessionId = obj.optString("batchSessionId", "").ifBlank { null }
                     )
                 )
             }
             _tasksFlow.value = loaded
         } catch (_: Exception) {}
+    }
+
+    // =========================================================================
+    // BATCH DOWNLOAD ENGINE IMPLEMENTATION
+    // =========================================================================
+
+    fun startBatchDownload(urls: List<String>, config: BatchDownloadConfig): String {
+        val validUrls = urls.map { it.trim() }.filter { it.startsWith("http://", ignoreCase = true) || it.startsWith("https://", ignoreCase = true) }
+        if (validUrls.isEmpty()) {
+            onFeedback("No valid HTTP/HTTPS media URLs found for batch download.")
+            return ""
+        }
+        val sessionId = "batch_" + UUID.randomUUID().toString().take(8)
+        val initialItems = validUrls.mapIndexed { idx, u ->
+            BatchDownloadItemStatus(
+                index = idx,
+                url = u,
+                platform = MediaPlatform.detectFromUrl(u),
+                title = "Item #${idx + 1}",
+                state = BatchItemState.QUEUED
+            )
+        }
+        val session = BatchSession(
+            id = sessionId,
+            totalCount = validUrls.size,
+            queuedCount = validUrls.size,
+            config = config,
+            items = initialItems
+        )
+        _activeBatchSessionFlow.value = session
+        onFeedback("Batch download started: ${validUrls.size} items queued (${config.downloadMode.displayName})")
+        launchBatchExecution(sessionId, initialItems, config)
+        return sessionId
+    }
+
+    private fun launchBatchExecution(
+        sessionId: String,
+        itemsToProcess: List<BatchDownloadItemStatus>,
+        config: BatchDownloadConfig
+    ) {
+        activeBatchJob?.cancel()
+        val concurrency = config.maxConcurrentDownloads.coerceIn(1, 4)
+        val semaphore = Semaphore(concurrency)
+
+        activeBatchJob = scope.launch(Dispatchers.IO) {
+            val backendUrl = _backendUrlFlow.value.takeIf { it.isNotBlank() }
+            itemsToProcess.map { item ->
+                launch {
+                    semaphore.withPermit {
+                        val currentSession = _activeBatchSessionFlow.value
+                        if (currentSession == null || currentSession.id != sessionId || currentSession.isCancelled) {
+                            return@withPermit
+                        }
+
+                        updateBatchItem(sessionId, item.index) {
+                            it.copy(state = BatchItemState.FETCHING, progress = 0.05f)
+                        }
+
+                        try {
+                            val mediaInfo = extractionEngine.extractMediaInfo(item.url, backendUrl)
+                            val format = selectBatchFormat(mediaInfo, config)
+                            if (format == null) {
+                                updateBatchItem(sessionId, item.index) {
+                                    it.copy(
+                                        state = BatchItemState.FAILED,
+                                        title = mediaInfo.title,
+                                        thumbnailUrl = mediaInfo.thumbnailUrl,
+                                        errorMessage = "No compatible format found"
+                                    )
+                                }
+                                incrementBatchCounts(sessionId, failed = true)
+                                return@withPermit
+                            }
+
+                            updateBatchItem(sessionId, item.index) {
+                                it.copy(
+                                    title = mediaInfo.title,
+                                    thumbnailUrl = mediaInfo.thumbnailUrl,
+                                    qualityLabel = format.qualityLabel,
+                                    state = BatchItemState.DOWNLOADING,
+                                    progress = 0.10f
+                                )
+                            }
+
+                            val taskId = startDownload(mediaInfo, format, batchSessionId = sessionId)
+                            updateBatchItem(sessionId, item.index) { it.copy(taskId = taskId) }
+
+                            var taskFinished = false
+                            while (!taskFinished) {
+                                val curSession = _activeBatchSessionFlow.value
+                                if (curSession == null || curSession.id != sessionId || curSession.isCancelled) {
+                                    cancelDownload(taskId)
+                                    break
+                                }
+
+                                val curTask = _tasksFlow.value.find { it.id == taskId }
+                                if (curTask == null) {
+                                    break
+                                }
+
+                                when (curTask.stage) {
+                                    DownloadStateStage.COMPLETED -> {
+                                        updateBatchItem(sessionId, item.index) {
+                                            it.copy(
+                                                state = BatchItemState.COMPLETED,
+                                                progress = 1.0f,
+                                                downloadedBytes = curTask.downloadedBytes,
+                                                totalBytes = curTask.totalBytes
+                                            )
+                                        }
+                                        incrementBatchCounts(sessionId, completed = true)
+                                        taskFinished = true
+                                    }
+                                    DownloadStateStage.FAILED -> {
+                                        updateBatchItem(sessionId, item.index) {
+                                            it.copy(
+                                                state = BatchItemState.FAILED,
+                                                progress = curTask.progress,
+                                                errorMessage = curTask.errorMessage ?: "Download failed"
+                                            )
+                                        }
+                                        incrementBatchCounts(sessionId, failed = true)
+                                        taskFinished = true
+                                    }
+                                    else -> {
+                                        updateBatchItem(sessionId, item.index) {
+                                            it.copy(
+                                                progress = curTask.progress,
+                                                downloadedBytes = curTask.downloadedBytes,
+                                                totalBytes = curTask.totalBytes
+                                            )
+                                        }
+                                        delay(300L)
+                                    }
+                                }
+                            }
+                        } catch (e: Exception) {
+                            updateBatchItem(sessionId, item.index) {
+                                it.copy(
+                                    state = BatchItemState.FAILED,
+                                    errorMessage = e.message ?: "Failed to process media"
+                                )
+                            }
+                            incrementBatchCounts(sessionId, failed = true)
+                        }
+                    }
+                }
+            }.joinAll()
+
+            _activeBatchSessionFlow.update { session ->
+                if (session != null && session.id == sessionId) {
+                    session.copy(isFinished = true)
+                } else session
+            }
+            val finalSession = _activeBatchSessionFlow.value
+            if (finalSession != null && finalSession.id == sessionId) {
+                onFeedback("Batch download completed: ${finalSession.completedCount} succeeded, ${finalSession.failedCount} failed")
+            }
+        }
+    }
+
+    fun selectBatchFormat(info: MediaInfo, config: BatchDownloadConfig): MediaFormatOption? {
+        return if (config.downloadMode.isAudioOnly) {
+            val audioList = info.audioFormats
+            if (audioList.isNotEmpty()) {
+                audioList.minByOrNull {
+                    kotlin.math.abs(it.bitrateKbps - config.preferredAudioBitrateKbps)
+                } ?: audioList.first()
+            } else {
+                val vid = info.videoFormats.firstOrNull() ?: info.allFormats.firstOrNull()
+                vid?.copy(
+                    isAudioOnly = true,
+                    container = if (config.downloadMode == BatchDownloadMode.AUDIO_MP3) "mp3" else "m4a"
+                )
+            }
+        } else {
+            val videoList = info.videoFormats.ifEmpty { info.allFormats.filter { !it.isAudioOnly } }
+            if (videoList.isNotEmpty()) {
+                val exactOrLower = videoList.filter { it.resolutionHeight <= config.preferredResolutionHeight }
+                if (exactOrLower.isNotEmpty()) {
+                    exactOrLower.maxByOrNull { it.resolutionHeight } ?: exactOrLower.first()
+                } else {
+                    videoList.minByOrNull { it.resolutionHeight } ?: videoList.first()
+                }
+            } else {
+                info.allFormats.firstOrNull()
+            }
+        }
+    }
+
+    private fun updateBatchItem(
+        sessionId: String,
+        index: Int,
+        transform: (BatchDownloadItemStatus) -> BatchDownloadItemStatus
+    ) {
+        _activeBatchSessionFlow.update { session ->
+            if (session != null && session.id == sessionId) {
+                val newItems = session.items.toMutableList()
+                if (index in 0 until newItems.size) {
+                    newItems[index] = transform(newItems[index])
+                }
+                session.copy(items = newItems)
+            } else session
+        }
+    }
+
+    private fun incrementBatchCounts(sessionId: String, completed: Boolean = false, failed: Boolean = false) {
+        _activeBatchSessionFlow.update { session ->
+            if (session != null && session.id == sessionId) {
+                val newComp = if (completed) session.completedCount + 1 else session.completedCount
+                val newFail = if (failed) session.failedCount + 1 else session.failedCount
+                val newQueued = (session.totalCount - newComp - newFail).coerceAtLeast(0)
+                session.copy(
+                    completedCount = newComp,
+                    failedCount = newFail,
+                    queuedCount = newQueued
+                )
+            } else session
+        }
+    }
+
+    fun pauseBatch() {
+        val session = _activeBatchSessionFlow.value ?: return
+        _activeBatchSessionFlow.value = session.copy(isPaused = true)
+        session.items.mapNotNull { it.taskId }.forEach { pauseDownload(it) }
+        onFeedback("Batch download paused.")
+    }
+
+    fun resumeBatch() {
+        val session = _activeBatchSessionFlow.value ?: return
+        _activeBatchSessionFlow.value = session.copy(isPaused = false)
+        session.items.mapNotNull { it.taskId }.forEach { resumeDownload(it) }
+        onFeedback("Batch download resumed.")
+    }
+
+    fun cancelBatch() {
+        val session = _activeBatchSessionFlow.value ?: return
+        activeBatchJob?.cancel()
+        _activeBatchSessionFlow.value = session.copy(isCancelled = true, isFinished = true)
+        session.items.mapNotNull { it.taskId }.forEach { cancelDownload(it) }
+        onFeedback("Batch download cancelled.")
+    }
+
+    fun retryFailedBatchItems() {
+        val session = _activeBatchSessionFlow.value ?: return
+        val failedItems = session.items.filter { it.state == BatchItemState.FAILED }
+        if (failedItems.isEmpty()) {
+            onFeedback("No failed items to retry.")
+            return
+        }
+        val updatedItems = session.items.map { item ->
+            if (item.state == BatchItemState.FAILED) {
+                item.copy(state = BatchItemState.QUEUED, progress = 0f, errorMessage = null, taskId = null)
+            } else item
+        }
+        val newFailedCount = (session.failedCount - failedItems.size).coerceAtLeast(0)
+        val newQueuedCount = session.queuedCount + failedItems.size
+        _activeBatchSessionFlow.value = session.copy(
+            isFinished = false,
+            isCancelled = false,
+            isPaused = false,
+            failedCount = newFailedCount,
+            queuedCount = newQueuedCount,
+            items = updatedItems
+        )
+        onFeedback("Retrying ${failedItems.size} failed batch items...")
+        launchBatchExecution(session.id, updatedItems.filter { it.state == BatchItemState.QUEUED }, session.config)
+    }
+
+    fun clearBatchSession() {
+        _activeBatchSessionFlow.value = null
     }
 }
