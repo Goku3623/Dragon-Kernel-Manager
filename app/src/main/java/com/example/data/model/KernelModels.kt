@@ -115,9 +115,14 @@ data class BatteryTelemetry(
 data class FreshStartTelemetryConfig(
     val autoFreshStartOnUnplug: Boolean = true,
     val autoFreshStartOnFullCharge: Boolean = true,
+    val autoFreshStartOnCustomChargeLevel: Boolean = false,
+    val customFreshStartChargePercent: Int = 80,
+    val autoFreshStartOnPlugIn: Boolean = false,
     val autoFreshStartOnBoot: Boolean = false,
-    val telemetryBaselineMode: String = "CURRENT_UNPLUG", // "CURRENT_UNPLUG", "CUSTOM_FRESH", "CONTINUOUS"
-    val sessionStartTimeMs: Long = System.currentTimeMillis()
+    val telemetryBaselineMode: String = "ON_UNPLUG", // "ON_UNPLUG", "ON_FULL_CHARGE", "ON_CUSTOM_LEVEL", "ON_PLUG_IN", "ON_BOOT", "MANUAL_ONLY"
+    val sessionStartTimeMs: Long = System.currentTimeMillis(),
+    val sessionStartBatteryPercent: Int = 100,
+    val lastResetReason: String = "Manual / Initial Session"
 )
 
 enum class BatteryProfile(

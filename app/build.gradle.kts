@@ -80,9 +80,27 @@ secrets {
 
 googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.WARN }
 
+val compileXposedStubs by tasks.registering(JavaCompile::class) {
+  source = fileTree("src/xposedStub/java")
+  destinationDirectory.set(layout.buildDirectory.dir("intermediates/xposedStubClasses"))
+  sourceCompatibility = "11"
+  targetCompatibility = "11"
+  classpath = files()
+}
+
+val jarXposedStubs by tasks.registering(org.gradle.jvm.tasks.Jar::class) {
+  dependsOn(compileXposedStubs)
+  from(compileXposedStubs.map { it.destinationDirectory })
+  exclude("android/content/**")
+  exclude("android/app/Application.class")
+  archiveFileName.set("xposed-api-82-stub.jar")
+  destinationDirectory.set(layout.buildDirectory.dir("intermediates/xposedStubJar"))
+}
+
 // Some unused dependencies are commented out below instead of being removed.
 // This makes it easy to add them back in the future if needed.
 dependencies {
+  compileOnly(files(jarXposedStubs.map { it.archiveFile }))
   implementation(platform(libs.androidx.compose.bom))
   implementation(platform(libs.firebase.bom))
   // implementation(libs.accompanist.permissions)

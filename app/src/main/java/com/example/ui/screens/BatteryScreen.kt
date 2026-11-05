@@ -33,7 +33,7 @@ import com.example.ui.theme.SuccessGreen
 import com.example.ui.theme.WarningOrange
 import java.util.Locale
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun BatteryScreen(repository: KernelRepository) {
     val battery by repository.batteryFlow.collectAsState()
@@ -367,10 +367,335 @@ fun BatteryScreen(repository: KernelRepository) {
 
                         Spacer(modifier = Modifier.height(14.dp))
                         HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // WHEN TO START FRESH TELEMETRY SECTION
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Schedule,
+                                    contentDescription = "When to Start Fresh Telemetry",
+                                    tint = NeonCyan,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "WHEN TO START FRESH TELEMETRY",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Black,
+                                    color = NeonCyan,
+                                    letterSpacing = 0.8.sp
+                                )
+                            }
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = NeonCyan.copy(alpha = 0.14f)
+                            ) {
+                                Text(
+                                    text = freshStartConfig.telemetryBaselineMode.replace("_", " "),
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = NeonCyan,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        // Active Baseline Status Banner
+                        val elapsedMinutes = ((System.currentTimeMillis() - freshStartConfig.sessionStartTimeMs).coerceAtLeast(0L) / 60000L)
+                        val elapsedFormatted = if (elapsedMinutes >= 60) {
+                            "${elapsedMinutes / 60}h ${elapsedMinutes % 60}m ago"
+                        } else {
+                            "${elapsedMinutes}m ago"
+                        }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Last Fresh Start: ${freshStartConfig.lastResetReason}",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "Baseline: ${freshStartConfig.sessionStartBatteryPercent}% • Started $elapsedFormatted",
+                                    fontSize = 10.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Icon(
+                                imageVector = Icons.Default.CheckCircle,
+                                contentDescription = null,
+                                tint = SuccessGreen,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Text(
+                            text = "Quick Trigger Preset:",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        val baselinePresets = listOf(
+                            "ON_UNPLUG" to "On Unplug",
+                            "ON_FULL_CHARGE" to "At 100% Full",
+                            "ON_CUSTOM_LEVEL" to "At ${freshStartConfig.customFreshStartChargePercent}% Charge",
+                            "ON_PLUG_IN" to "On Plug-In",
+                            "ON_BOOT" to "On Device Boot",
+                            "MANUAL_ONLY" to "Manual Only"
+                        )
+
+                        FlowRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            baselinePresets.forEach { (modeKey, label) ->
+                                val isSelected = freshStartConfig.telemetryBaselineMode == modeKey
+                                FilterChip(
+                                    selected = isSelected,
+                                    onClick = { repository.setFreshStartBaselinePreset(modeKey) },
+                                    label = {
+                                        Text(
+                                            text = label,
+                                            fontSize = 10.5.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                        )
+                                    },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = NeonCyan.copy(alpha = 0.2f),
+                                        selectedLabelColor = NeonCyan
+                                    )
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Granular Auto-Start Triggers
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f))
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = "Automatic Fresh Start Conditions (Multi-Trigger)",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+
+                            // 1. On Unplug
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "When Charger Unplugged",
+                                        fontSize = 11.5.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "Resets SOT & drain counters immediately upon disconnecting power",
+                                        fontSize = 9.5.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = freshStartConfig.autoFreshStartOnUnplug,
+                                    onCheckedChange = { enabled ->
+                                        repository.updateFreshStartConfig(
+                                            freshStartConfig.copy(autoFreshStartOnUnplug = enabled)
+                                        )
+                                    }
+                                )
+                            }
+
+                            HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+
+                            // 2. At 100% Full Charge
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "When Battery Reaches 100% Full Charge",
+                                        fontSize = 11.5.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "Starts a clean cycle baseline as soon as battery hits 100%",
+                                        fontSize = 9.5.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = freshStartConfig.autoFreshStartOnFullCharge,
+                                    onCheckedChange = { enabled ->
+                                        repository.updateFreshStartConfig(
+                                            freshStartConfig.copy(autoFreshStartOnFullCharge = enabled)
+                                        )
+                                    }
+                                )
+                            }
+
+                            HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+
+                            // 3. At Custom Charge Target %
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "At Custom Charge Level (${freshStartConfig.customFreshStartChargePercent}%)",
+                                        fontSize = 11.5.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "Ideal if using 80%–90% charge limit or bypass charging",
+                                        fontSize = 9.5.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = freshStartConfig.autoFreshStartOnCustomChargeLevel,
+                                    onCheckedChange = { enabled ->
+                                        repository.updateFreshStartConfig(
+                                            freshStartConfig.copy(autoFreshStartOnCustomChargeLevel = enabled)
+                                        )
+                                    }
+                                )
+                            }
+
+                            AnimatedVisibility(visible = freshStartConfig.autoFreshStartOnCustomChargeLevel) {
+                                Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        listOf(75, 80, 85, 90, 95).forEach { pct ->
+                                            val isPctSelected = freshStartConfig.customFreshStartChargePercent == pct
+                                            FilterChip(
+                                                selected = isPctSelected,
+                                                onClick = {
+                                                    repository.updateFreshStartConfig(
+                                                        freshStartConfig.copy(customFreshStartChargePercent = pct)
+                                                    )
+                                                },
+                                                label = { Text("$pct%", fontSize = 10.sp, fontWeight = FontWeight.Bold) }
+                                            )
+                                        }
+                                    }
+                                    Slider(
+                                        value = freshStartConfig.customFreshStartChargePercent.toFloat(),
+                                        onValueChange = { newVal ->
+                                            repository.updateFreshStartConfig(
+                                                freshStartConfig.copy(customFreshStartChargePercent = newVal.toInt())
+                                            )
+                                        },
+                                        valueRange = 50f..100f,
+                                        steps = 9
+                                    )
+                                }
+                            }
+
+                            HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+
+                            // 4. On Charger Plug-In
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "When Charger Plugged In",
+                                        fontSize = 11.5.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "Resets telemetry session when connecting power adapter",
+                                        fontSize = 9.5.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = freshStartConfig.autoFreshStartOnPlugIn,
+                                    onCheckedChange = { enabled ->
+                                        repository.updateFreshStartConfig(
+                                            freshStartConfig.copy(autoFreshStartOnPlugIn = enabled)
+                                        )
+                                    }
+                                )
+                            }
+
+                            HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+
+                            // 5. On Device Boot
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "On Device Boot / Reboot",
+                                        fontSize = 11.5.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "Starts fresh telemetry session automatically when Android boots",
+                                        fontSize = 9.5.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = freshStartConfig.autoFreshStartOnBoot,
+                                    onCheckedChange = { enabled ->
+                                        repository.updateFreshStartConfig(
+                                            freshStartConfig.copy(autoFreshStartOnBoot = enabled)
+                                        )
+                                    }
+                                )
+                            }
+                        }
+
                         Spacer(modifier = Modifier.height(12.dp))
 
                         Button(
-                            onClick = { repository.startFreshTelemetrySession() },
+                            onClick = { repository.startFreshTelemetrySession("Manual Reset") },
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(10.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
@@ -382,7 +707,7 @@ fun BatteryScreen(repository: KernelRepository) {
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "Start Fresh Telemetry Session",
+                                text = "Start Fresh Telemetry Session Now",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold
                             )

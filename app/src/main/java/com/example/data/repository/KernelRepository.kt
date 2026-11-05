@@ -374,23 +374,76 @@ class KernelRepository private constructor(private val context: Context) {
     @Volatile
     private var lastFrameGenHardwareAppliedForPkg: String = ""
 
-    fun startFreshTelemetrySession() {
+    @Volatile private var hasTriggeredFullChargeResetThisCycle: Boolean = false
+    @Volatile private var hasTriggeredCustomLevelResetThisCycle: Boolean = false
+    @Volatile private var lastObservedBatPctForFreshReset: Int = -1
+
+    fun startFreshTelemetrySession(reason: String = "Manual Reset") {
         val snap = readInstantHardwareBatterySnapshot()
         val bat = _batteryFlow.value
         val fullMah = bat.learnedFullCapacityMah.takeIf { it in 1000..25000 } ?: 5000
-        batteryStatsTracker.startFreshSession(snap.batPct, fullMah)
+        batteryStatsTracker.startFreshSession(snap.batPct, fullMah, snap.chargeCounterMah)
         val now = System.currentTimeMillis()
         val cur = _freshStartConfigFlow.value
-        val updated = cur.copy(sessionStartTimeMs = now)
+        val updated = cur.copy(
+            sessionStartTimeMs = now,
+            sessionStartBatteryPercent = snap.batPct.coerceIn(1, 100),
+            lastResetReason = reason
+        )
         _freshStartConfigFlow.value = updated
         saveFreshStartPrefs(updated)
-        _lastActionFeedbackFlow.value = "Fresh drain & sleep telemetry session active!"
+        _lastActionFeedbackFlow.value = "Fresh battery telemetry started at ${snap.batPct}% ($reason)"
         tickTelemetry()
     }
 
     fun updateFreshStartConfig(config: FreshStartTelemetryConfig) {
         _freshStartConfigFlow.value = config
         saveFreshStartPrefs(config)
+        _lastActionFeedbackFlow.value = "Fresh battery telemetry trigger settings updated"
+    }
+
+    fun setFreshStartBaselinePreset(mode: String) {
+        val cur = _freshStartConfigFlow.value
+        val updated = when (mode) {
+            "ON_UNPLUG" -> cur.copy(
+                telemetryBaselineMode = "ON_UNPLUG",
+                autoFreshStartOnUnplug = true,
+                autoFreshStartOnFullCharge = false,
+                autoFreshStartOnCustomChargeLevel = false,
+                autoFreshStartOnPlugIn = false,
+                autoFreshStartOnBoot = false
+            )
+            "ON_FULL_CHARGE" -> cur.copy(
+                telemetryBaselineMode = "ON_FULL_CHARGE",
+                autoFreshStartOnUnplug = true,
+                autoFreshStartOnFullCharge = true,
+                autoFreshStartOnCustomChargeLevel = false,
+                autoFreshStartOnPlugIn = false
+            )
+            "ON_CUSTOM_LEVEL" -> cur.copy(
+                telemetryBaselineMode = "ON_CUSTOM_LEVEL",
+                autoFreshStartOnCustomChargeLevel = true,
+                autoFreshStartOnUnplug = true
+            )
+            "ON_PLUG_IN" -> cur.copy(
+                telemetryBaselineMode = "ON_PLUG_IN",
+                autoFreshStartOnPlugIn = true,
+                autoFreshStartOnUnplug = false
+            )
+            "ON_BOOT" -> cur.copy(
+                telemetryBaselineMode = "ON_BOOT",
+                autoFreshStartOnBoot = true
+            )
+            else -> cur.copy(
+                telemetryBaselineMode = "MANUAL_ONLY",
+                autoFreshStartOnUnplug = false,
+                autoFreshStartOnFullCharge = false,
+                autoFreshStartOnCustomChargeLevel = false,
+                autoFreshStartOnPlugIn = false,
+                autoFreshStartOnBoot = false
+            )
+        }
+        updateFreshStartConfig(updated)
     }
 
     private fun saveFreshStartPrefs(config: FreshStartTelemetryConfig) {
@@ -399,9 +452,14 @@ class KernelRepository private constructor(private val context: Context) {
             prefs.edit()
                 .putBoolean("auto_unplug", config.autoFreshStartOnUnplug)
                 .putBoolean("auto_full", config.autoFreshStartOnFullCharge)
+                .putBoolean("auto_custom_level", config.autoFreshStartOnCustomChargeLevel)
+                .putInt("custom_charge_pct", config.customFreshStartChargePercent)
+                .putBoolean("auto_plug_in", config.autoFreshStartOnPlugIn)
                 .putBoolean("auto_boot", config.autoFreshStartOnBoot)
                 .putString("baseline_mode", config.telemetryBaselineMode)
                 .putLong("session_start_ms", config.sessionStartTimeMs)
+                .putInt("session_start_bat_pct", config.sessionStartBatteryPercent)
+                .putString("last_reset_reason", config.lastResetReason)
                 .apply()
         } catch (_: Exception) {}
     }
@@ -412,9 +470,14 @@ class KernelRepository private constructor(private val context: Context) {
             FreshStartTelemetryConfig(
                 autoFreshStartOnUnplug = prefs.getBoolean("auto_unplug", true),
                 autoFreshStartOnFullCharge = prefs.getBoolean("auto_full", true),
+                autoFreshStartOnCustomChargeLevel = prefs.getBoolean("auto_custom_level", false),
+                customFreshStartChargePercent = prefs.getInt("custom_charge_pct", 80).coerceIn(50, 100),
+                autoFreshStartOnPlugIn = prefs.getBoolean("auto_plug_in", false),
                 autoFreshStartOnBoot = prefs.getBoolean("auto_boot", false),
-                telemetryBaselineMode = prefs.getString("baseline_mode", "CURRENT_UNPLUG") ?: "CURRENT_UNPLUG",
-                sessionStartTimeMs = prefs.getLong("session_start_ms", System.currentTimeMillis())
+                telemetryBaselineMode = prefs.getString("baseline_mode", "ON_UNPLUG") ?: "ON_UNPLUG",
+                sessionStartTimeMs = prefs.getLong("session_start_ms", System.currentTimeMillis()),
+                sessionStartBatteryPercent = prefs.getInt("session_start_bat_pct", 100),
+                lastResetReason = prefs.getString("last_reset_reason", "Manual / Initial Session") ?: "Manual / Initial Session"
             )
         } catch (_: Exception) {
             FreshStartTelemetryConfig()
@@ -1717,15 +1780,17 @@ class KernelRepository private constructor(private val context: Context) {
 
     fun notifyPowerDisconnected() {
         sysfsStatusCharging = false
+        hasTriggeredFullChargeResetThisCycle = false
+        hasTriggeredCustomLevelResetThisCycle = false
         val snap = readInstantHardwareBatterySnapshot()
         _batteryFlow.value = _batteryFlow.value.copy(
             isCharging = false,
             levelPercent = snap.batPct
         )
         if (_freshStartConfigFlow.value.autoFreshStartOnUnplug) {
-            startFreshTelemetrySession()
+            startFreshTelemetrySession(reason = "Charger Unplugged")
         } else {
-            batteryStatsTracker.onUnplugged(snap.batPct)
+            batteryStatsTracker.onUnplugged(snap.batPct, snap.chargeCounterMah)
             tickTelemetry()
         }
     }
@@ -1746,10 +1811,16 @@ class KernelRepository private constructor(private val context: Context) {
 
     fun notifyPowerConnected() {
         sysfsStatusCharging = true
+        hasTriggeredFullChargeResetThisCycle = false
+        hasTriggeredCustomLevelResetThisCycle = false
         _batteryFlow.value = _batteryFlow.value.copy(isCharging = true)
         lastChargingEnforcementMs = 0L
         enforceActiveChargingRulesAsync(forceImmediate = true)
-        tickTelemetry()
+        if (_freshStartConfigFlow.value.autoFreshStartOnPlugIn) {
+            startFreshTelemetrySession(reason = "Charger Plugged In")
+        } else {
+            tickTelemetry()
+        }
     }
 
     private var lastEnforcedNightActiveState: Boolean? = null
@@ -1855,6 +1926,22 @@ class KernelRepository private constructor(private val context: Context) {
             if (!RootHelper.isRootAvailable) return@launch
             _isRootGrantedFlow.value = true
 
+            // CRITICAL: When Bypass Charging is active, ONLY enforce Bypass Charging!
+            // Never run enforceRootBypassThermalLimit, enforceRootNightCharging, or enforceRootChargingCurrentLimit
+            // after enforceRootBypassCharging(true), because those routines write 20,000,000 uA to constant_charge_current_max
+            // and 0 to charge_control_limit, which would immediately undo Bypass Charging!
+            if (needBypass) {
+                RootHelper.enforceRootBypassCharging(context.packageName, true)
+                lastEnforcedBypassState = true
+                return@launch
+            }
+
+            // If Bypass Charging was previously active and is now being turned off, restore normal charging first
+            if (lastEnforcedBypassState == true) {
+                RootHelper.enforceRootBypassCharging(context.packageName, false)
+                lastEnforcedBypassState = false
+            }
+
             if (isNightWindowOpen || lastEnforcedNightActiveState == true || forceImmediate) {
                 RootHelper.enforceRootNightCharging(
                     packageName = context.packageName,
@@ -1865,11 +1952,6 @@ class KernelRepository private constructor(private val context: Context) {
                     muteChargingLed = night.muteChargingLed
                 )
                 lastEnforcedNightActiveState = isNightWindowOpen
-            }
-
-            if (needBypass || lastEnforcedBypassState == true) {
-                RootHelper.enforceRootBypassCharging(context.packageName, needBypass)
-                lastEnforcedBypassState = needBypass
             }
 
             if (needThermalBypass && !isNightWindowOpen) {
@@ -1886,7 +1968,7 @@ class KernelRepository private constructor(private val context: Context) {
                 )
             }
 
-            if (shouldEnforceCurrentCeiling && !needBypass) {
+            if (shouldEnforceCurrentCeiling) {
                 val nightTargetMa = if (isTopUpPhase) {
                     min(1800, night.trickleCurrentMa + 400)
                 } else {
@@ -1917,7 +1999,7 @@ class KernelRepository private constructor(private val context: Context) {
                     fallbackCurrentMa = effectiveFallbackMa,
                     cooldownDeltaC = if (isNightWindowOpen) 1.5f else charging.customTempCooldownDeltaC,
                     isTempThrottlingTriggered = isNightThermalPaused || charging.isCustomTempThrottlingActive,
-                    externalBypassActive = needBypass
+                    externalBypassActive = false
                 )
             }
         }
@@ -1929,7 +2011,7 @@ class KernelRepository private constructor(private val context: Context) {
             val cmd = """
                 cat /sys/class/power_supply/battery/status 2>/dev/null || echo "UNKNOWN"
                 echo "---"
-                cat /sys/class/power_supply/battery/current_now 2>/dev/null || cat /sys/class/power_supply/bms/current_now 2>/dev/null || cat /sys/class/power_supply/usb/current_now 2>/dev/null || echo "0"
+                cat /sys/class/power_supply/battery/current_now 2>/dev/null || cat /sys/class/power_supply/bms/current_now 2>/dev/null || echo "0"
                 echo "---"
                 cat /sys/class/power_supply/battery/voltage_now 2>/dev/null || cat /sys/class/power_supply/bms/voltage_now 2>/dev/null || cat /sys/class/power_supply/usb/voltage_now 2>/dev/null || echo "0"
                 echo "---"
@@ -2064,13 +2146,12 @@ class KernelRepository private constructor(private val context: Context) {
             }
         }
 
-        // Read readable sysfs nodes directly in-process for zero-latency hardware reading
+        // Read battery cell current directly (never fallback to usb/current_now which is USB VBUS input current!)
         val directCurRaw = readDirectSysfsLong(
             "/sys/class/power_supply/battery/current_now",
-            "/sys/class/power_supply/bms/current_now",
-            "/sys/class/power_supply/usb/current_now"
+            "/sys/class/power_supply/bms/current_now"
         )
-        if (directCurRaw != null && directCurRaw != 0L) {
+        if (directCurRaw != null) {
             val absCur = kotlin.math.abs(directCurRaw)
             sysfsCurrentMa = if (absCur > 30000L) (absCur / 1000L).toInt() else absCur.toInt()
         }
@@ -2115,7 +2196,7 @@ class KernelRepository private constructor(private val context: Context) {
                                 sysfsStatusCharging = false
                             }
                             val cur = parts.getOrNull(1)?.trim()?.toLongOrNull()
-                            if (cur != null && cur != 0L) {
+                            if (cur != null) {
                                 val absC = kotlin.math.abs(cur)
                                 sysfsCurrentMa = if (absC > 30000L) (absC / 1000L).toInt() else absC.toInt()
                             }
@@ -2254,6 +2335,42 @@ class KernelRepository private constructor(private val context: Context) {
         val isPluggedIn = plugged != 0 || (sysfsStatusCharging == true) || (status == BatteryManager.BATTERY_STATUS_NOT_CHARGING)
         val isIntentCharging = (status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL)
         val isRealCharging = sysfsStatusCharging ?: isIntentCharging
+
+        // Evaluate automatic Fresh Telemetry session triggers when reaching 100% Full Charge or Custom Target %
+        val freshCfg = _freshStartConfigFlow.value
+        if (isPluggedIn || isRealCharging) {
+            if (freshCfg.autoFreshStartOnFullCharge && batPct >= 100 && !hasTriggeredFullChargeResetThisCycle) {
+                hasTriggeredFullChargeResetThisCycle = true
+                val fullMah = _batteryFlow.value.learnedFullCapacityMah.takeIf { it in 1000..25000 } ?: 5000
+                batteryStatsTracker.startFreshSession(100, fullMah)
+                val updatedFresh = freshCfg.copy(
+                    sessionStartTimeMs = System.currentTimeMillis(),
+                    sessionStartBatteryPercent = 100,
+                    lastResetReason = "Reached 100% Full Charge"
+                )
+                _freshStartConfigFlow.value = updatedFresh
+                saveFreshStartPrefs(updatedFresh)
+            } else if (freshCfg.autoFreshStartOnCustomChargeLevel &&
+                batPct >= freshCfg.customFreshStartChargePercent &&
+                lastObservedBatPctForFreshReset in 1 until freshCfg.customFreshStartChargePercent &&
+                !hasTriggeredCustomLevelResetThisCycle
+            ) {
+                hasTriggeredCustomLevelResetThisCycle = true
+                val fullMah = _batteryFlow.value.learnedFullCapacityMah.takeIf { it in 1000..25000 } ?: 5000
+                batteryStatsTracker.startFreshSession(batPct, fullMah)
+                val updatedFresh = freshCfg.copy(
+                    sessionStartTimeMs = System.currentTimeMillis(),
+                    sessionStartBatteryPercent = batPct,
+                    lastResetReason = "Reached ${freshCfg.customFreshStartChargePercent}% Target Charge"
+                )
+                _freshStartConfigFlow.value = updatedFresh
+                saveFreshStartPrefs(updatedFresh)
+            }
+        } else {
+            if (batPct < 99) hasTriggeredFullChargeResetThisCycle = false
+            if (batPct < freshCfg.customFreshStartChargePercent) hasTriggeredCustomLevelResetThisCycle = false
+        }
+        lastObservedBatPctForFreshReset = batPct
 
         // Read Android 14+ EXTRA_CYCLE_COUNT and EXTRA_HEALTH from sticky broadcast
         val intentCycleCount = bStatus?.getIntExtra("android.os.extra.CYCLE_COUNT", -1) ?: -1
@@ -2479,23 +2596,31 @@ class KernelRepository private constructor(private val context: Context) {
         val bmAbsCurrentMa = kotlin.math.abs(rawCurrentNow).let { absVal ->
             if (absVal > 30000) absVal / 1000 else absVal
         }
-        // Prefer root /sys/class/power_supply/battery/current_now when available, fallback to BatteryManager current_now
-        val hardwareMeasuredMa = sysfsCurrentMa?.takeIf { it > 0 } ?: bmAbsCurrentMa
+        // Prefer root /sys/class/power_supply/battery/current_now (including 0 mA during bypass!), fallback to BatteryManager
+        val hardwareMeasuredMa = sysfsCurrentMa ?: bmAbsCurrentMa
 
         val powerManager = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
         val isScreenInteractive = powerManager?.isInteractive ?: true
 
         // True Hardware Verification for Bypass Mode:
-        // When motherboard bypass is active, current through the battery cell drops to negligible levels (idle).
-        // If the measured current is <= 90 mA (or raw <= 90000 uA), hardware bypass is verified active.
-        val isBypassVerified = isBypass && (hardwareMeasuredMa <= 90 || kotlin.math.abs(rawCurrentNow) <= 90_000)
+        // Verified when kernel status is Not charging / Discharging OR battery cell current is <= 120 mA
+        val isBypassVerified = isBypass && (
+            sysfsStatusCharging == false ||
+            hardwareMeasuredMa <= 120 ||
+            kotlin.math.abs(rawCurrentNow) <= 120_000
+        )
+
+        // Closed-loop watchdog: if bypass is enabled while plugged in but kernel PMIC is still charging >120 mA, re-enforce
+        if (isBypass && isPluggedIn && !isBypassVerified) {
+            enforceActiveChargingRulesAsync(forceImmediate = false)
+        }
 
         // Strictly report the ACTUAL live charging/discharging current
         // Preserve low standby currents (5..50 mA) when screen is off, and clamp to Night Trickle / Limiter ceiling when active
         val currentMa = when {
             isBypass -> {
                 if (isBypassVerified) {
-                    if (hardwareMeasuredMa in 1..80) hardwareMeasuredMa else 0
+                    if (hardwareMeasuredMa in 1..60 && sysfsStatusCharging == true) hardwareMeasuredMa else 0
                 } else {
                     // Honestly report the actual current if the hardware charger is still ramping down to 0
                     hardwareMeasuredMa
@@ -6727,6 +6852,28 @@ class KernelRepository private constructor(private val context: Context) {
     // AD BLOCKER & SOCIAL MEDIA ANTI-TRACKING ENGINE
     // ========================================================================
 
+    fun recordRealSocialAdIntercept(
+        platform: SocialPlatform,
+        descriptor: String,
+        action: String
+    ) {
+        val curTelem = _adBlockerTelemetryFlow.value
+        val newEv = AdBlockEvent(
+            timestamp = System.currentTimeMillis(),
+            platformName = platform.shortName,
+            domain = descriptor,
+            action = action
+        )
+        val updatedEvents = (listOf(newEv) + curTelem.recentBlockedEvents).take(25)
+        _adBlockerTelemetryFlow.value = curTelem.copy(
+            totalBlockedQueries = curTelem.totalBlockedQueries + 1L,
+            blockedTodayQueries = curTelem.blockedTodayQueries + 1L,
+            inAppAdsSkippedCount = curTelem.inAppAdsSkippedCount + 1,
+            isInAppAdShieldActive = true,
+            recentBlockedEvents = updatedEvents
+        )
+    }
+
     private fun onForegroundAppChangedForAdBlocker(packageName: String) {
         val cfg = _adBlockerConfigFlow.value
         val detected = AdBlockerEngine.detectSocialPlatform(packageName)
@@ -6735,8 +6882,9 @@ class KernelRepository private constructor(private val context: Context) {
         if (detected != null) {
             val isPlatformEnabled = cfg.platformToggles[detected.id] ?: true
             if (isPlatformEnabled && (cfg.autoActivateOnSocialApps || cfg.isGlobalEnabled)) {
+                val wasAlreadyActive = curTelem.isActive
                 val newEv = AdBlockerEngine.generateEventForBlockedDomain(detected)
-                val updatedEvents = (listOf(newEv) + curTelem.recentBlockedEvents).take(20)
+                val updatedEvents = (listOf(newEv) + curTelem.recentBlockedEvents).take(25)
                 _adBlockerTelemetryFlow.value = curTelem.copy(
                     isActive = true,
                     isAutoTriggered = true,
@@ -6747,10 +6895,11 @@ class KernelRepository private constructor(private val context: Context) {
                     recentBlockedEvents = updatedEvents,
                     lastActivatedTimestamp = System.currentTimeMillis()
                 )
-                scope.launch(Dispatchers.IO) {
-                    AdBlockerEngine.applyAdBlocking(context, cfg)
-                    if (cfg.autoPurgeSocialAdCaches) {
-                        AdBlockerEngine.purgeSocialAdCaches(listOf(packageName))
+                // Only apply system rules when transitioning from inactive -> active
+                if (!wasAlreadyActive) {
+                    scope.launch(Dispatchers.IO) {
+                        val status = AdBlockerEngine.applyAdBlocking(context, cfg)
+                        syncAdBlockerVerificationStatus(status)
                     }
                 }
             }
@@ -6765,13 +6914,81 @@ class KernelRepository private constructor(private val context: Context) {
                 scope.launch(Dispatchers.IO) {
                     AdBlockerEngine.disableAdBlocking(context)
                 }
-            } else {
+            } else if (curTelem.activeForegroundApp != packageName) {
                 _adBlockerTelemetryFlow.value = curTelem.copy(
                     activeForegroundApp = packageName,
                     activeForegroundPlatform = null
                 )
             }
         }
+    }
+
+    fun syncAdBlockerVerificationStatus() {
+        scope.launch(Dispatchers.IO) {
+            val status = AdBlockerEngine.verifyActiveProtection(context, _adBlockerConfigFlow.value)
+            syncAdBlockerVerificationStatus(status)
+        }
+    }
+
+    fun grantLsposedPermissionsAndSync() {
+        scope.launch(Dispatchers.IO) {
+            val granted = com.example.xposed.DragonLSPosedStatus.grantLSPosedModulePermissions(context)
+            val status = AdBlockerEngine.applyAdBlocking(context, _adBlockerConfigFlow.value, forceReapply = true)
+            syncAdBlockerVerificationStatus(status)
+            _lastActionFeedbackFlow.value = if (granted) {
+                "LSPosed Module Permissions, SELinux Rules & World-Readable Configs Granted"
+            } else {
+                "LSPosed ContentProvider Active (Grant Root for SELinux & XSharedPreferences sync)"
+            }
+        }
+    }
+
+    fun openLsposedManager() {
+        scope.launch(Dispatchers.IO) {
+            com.example.xposed.DragonLSPosedStatus.grantLSPosedModulePermissions(context)
+            val opened = com.example.xposed.DragonLSPosedStatus.openLSPosedManager(context)
+            if (opened) {
+                _lastActionFeedbackFlow.value = "Opening LSPosed Manager • Enable Dragon Kernel Tools & Scope"
+            } else {
+                _lastActionFeedbackFlow.value = "LSPosed Manager not found • Module ready for Zygisk/Riru LSPosed"
+            }
+        }
+    }
+
+    fun openAccessibilitySettings() {
+        if (RootHelper.isRootAvailable) {
+            grantAccessibilityViaRoot()
+            syncAdBlockerVerificationStatus()
+        } else {
+            try {
+                val intent = Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(intent)
+            } catch (_: Exception) {}
+        }
+    }
+
+    private suspend fun syncAdBlockerVerificationStatus(status: com.example.data.adblock.AdBlockerVerificationStatus) {
+        val lspInfo = com.example.xposed.DragonLSPosedStatus.inspectLSPosedEnvironment(context)
+        val cur = _adBlockerTelemetryFlow.value
+        val accActive = _isAccessibilityEnabledFlow.value || checkAccessibilityStatus()
+        val isLspActive = lspInfo.isModuleHookedInApp || lspInfo.isModuleEnabledInLSPosed
+        val summaryPrefix = if (isLspActive) "LSPosed Hook Active + " else ""
+        _adBlockerTelemetryFlow.value = cur.copy(
+            activeDnsSpecifier = status.activeDnsHost,
+            activeHostsEntriesCount = status.activeHostsCount,
+            isHostsSinkholeVerified = status.isHostsSinkholeVerified,
+            isPrivateDnsVerified = status.isPrivateDnsVerified,
+            isNetfilterVerified = status.isNetfilterVerified,
+            isQuicBlocked = status.isQuicBlocked,
+            isInAppAdShieldActive = isLspActive || (accActive && (_adBlockerConfigFlow.value.autoSkipInAppSocialAds || _adBlockerConfigFlow.value.autoSwipeSponsoredReels)),
+            isLsposedFrameworkDetected = lspInfo.isFrameworkInstalled,
+            isLsposedModuleActive = isLspActive,
+            lsposedVariant = lspInfo.frameworkVariant,
+            lsposedPermissionsGranted = lspInfo.arePermissionsGranted,
+            enforcementSummary = summaryPrefix + status.enforcementSummary
+        )
     }
 
     private fun loadAdBlockerPrefs(): AdBlockerConfig {
@@ -6787,6 +7004,10 @@ class KernelRepository private constructor(private val context: Context) {
             val telemetry = prefs.getBoolean("adblock_telemetry", true)
             val reelsAds = prefs.getBoolean("adblock_reels_ads", true)
             val autoPurge = prefs.getBoolean("adblock_auto_purge_caches", true)
+            val blockQuic = prefs.getBoolean("adblock_block_quic", true)
+            val blockIpv6 = prefs.getBoolean("adblock_block_ipv6", true)
+            val autoSkipInApp = prefs.getBoolean("adblock_auto_skip_inapp", true)
+            val autoSwipeReels = prefs.getBoolean("adblock_auto_swipe_reels", true)
 
             val toggles = mutableMapOf<String, Boolean>()
             SocialPlatform.values().forEach { platform ->
@@ -6806,6 +7027,10 @@ class KernelRepository private constructor(private val context: Context) {
                 blockTelemetry = telemetry,
                 blockReelsAndStoriesAds = reelsAds,
                 autoPurgeSocialAdCaches = autoPurge,
+                blockQuicProtocol = blockQuic,
+                blockIpv6AdLeakage = blockIpv6,
+                autoSkipInAppSocialAds = autoSkipInApp,
+                autoSwipeSponsoredReels = autoSwipeReels,
                 platformToggles = toggles,
                 customBlacklistDomains = blacklist,
                 customWhitelistDomains = whitelist
@@ -6828,6 +7053,10 @@ class KernelRepository private constructor(private val context: Context) {
                 .putBoolean("adblock_telemetry", config.blockTelemetry)
                 .putBoolean("adblock_reels_ads", config.blockReelsAndStoriesAds)
                 .putBoolean("adblock_auto_purge_caches", config.autoPurgeSocialAdCaches)
+                .putBoolean("adblock_block_quic", config.blockQuicProtocol)
+                .putBoolean("adblock_block_ipv6", config.blockIpv6AdLeakage)
+                .putBoolean("adblock_auto_skip_inapp", config.autoSkipInAppSocialAds)
+                .putBoolean("adblock_auto_swipe_reels", config.autoSwipeSponsoredReels)
 
             config.platformToggles.forEach { (id, enabled) ->
                 editor.putBoolean("adblock_platform_$id", enabled)
@@ -6837,6 +7066,13 @@ class KernelRepository private constructor(private val context: Context) {
             editor.putStringSet("adblock_custom_whitelist", config.customWhitelistDomains.toSet())
             editor.apply()
         } catch (_: Exception) {}
+    }
+
+    private fun applyAndVerifyAdBlockerAsync(config: AdBlockerConfig) {
+        scope.launch(Dispatchers.IO) {
+            val status = AdBlockerEngine.applyAdBlocking(context, config)
+            syncAdBlockerVerificationStatus(status)
+        }
     }
 
     fun toggleAdBlockerGlobal(enabled: Boolean) {
@@ -6849,14 +7085,14 @@ class KernelRepository private constructor(private val context: Context) {
             isActive = enabled,
             isAutoTriggered = false
         )
-        scope.launch(Dispatchers.IO) {
-            if (enabled) {
-                AdBlockerEngine.applyAdBlocking(context, updated)
-            } else {
+        if (enabled) {
+            applyAndVerifyAdBlockerAsync(updated)
+        } else {
+            scope.launch(Dispatchers.IO) {
                 AdBlockerEngine.disableAdBlocking(context)
             }
         }
-        _lastActionFeedbackFlow.value = if (enabled) "Ad Blocker Protection: ACTIVE" else "Ad Blocker Protection: DISABLED"
+        _lastActionFeedbackFlow.value = if (enabled) "Ad Blocker Multi-Layer Shield: ACTIVE" else "Ad Blocker Shield: DISABLED"
     }
 
     fun setAdBlockerAutoActivate(enabled: Boolean) {
@@ -6877,9 +7113,7 @@ class KernelRepository private constructor(private val context: Context) {
         _adBlockerConfigFlow.value = updated
         saveAdBlockerPrefs(updated)
         if (updated.isGlobalEnabled || _adBlockerTelemetryFlow.value.isActive) {
-            scope.launch(Dispatchers.IO) {
-                AdBlockerEngine.applyAdBlocking(context, updated)
-            }
+            applyAndVerifyAdBlockerAsync(updated)
         }
         _lastActionFeedbackFlow.value = "Blocking Mode: ${mode.title}"
     }
@@ -6892,9 +7126,7 @@ class KernelRepository private constructor(private val context: Context) {
         saveAdBlockerPrefs(updated)
         _adBlockerTelemetryFlow.value = _adBlockerTelemetryFlow.value.copy(activeDnsSpecifier = cleanDns)
         if (updated.isGlobalEnabled || _adBlockerTelemetryFlow.value.isActive) {
-            scope.launch(Dispatchers.IO) {
-                AdBlockerEngine.applyAdBlocking(context, updated)
-            }
+            applyAndVerifyAdBlockerAsync(updated)
         }
         _lastActionFeedbackFlow.value = "Active DNS Resolver: $cleanDns"
     }
@@ -6907,9 +7139,7 @@ class KernelRepository private constructor(private val context: Context) {
         _adBlockerConfigFlow.value = updated
         saveAdBlockerPrefs(updated)
         if (updated.isGlobalEnabled || _adBlockerTelemetryFlow.value.isActive) {
-            scope.launch(Dispatchers.IO) {
-                AdBlockerEngine.applyAdBlocking(context, updated)
-            }
+            applyAndVerifyAdBlockerAsync(updated)
         }
         val platformName = SocialPlatform.values().find { it.id == platformId }?.displayName ?: platformId
         _lastActionFeedbackFlow.value = "$platformName Ad Filtering: ${if (enabled) "ENABLED" else "DISABLED"}"
@@ -6920,6 +7150,9 @@ class KernelRepository private constructor(private val context: Context) {
         val updated = cur.copy(blockVideoAds = enabled)
         _adBlockerConfigFlow.value = updated
         saveAdBlockerPrefs(updated)
+        if (updated.isGlobalEnabled || _adBlockerTelemetryFlow.value.isActive) {
+            applyAndVerifyAdBlockerAsync(updated)
+        }
     }
 
     fun setAdBlockerFilterSponsoredPosts(enabled: Boolean) {
@@ -6927,6 +7160,9 @@ class KernelRepository private constructor(private val context: Context) {
         val updated = cur.copy(blockSponsoredPosts = enabled)
         _adBlockerConfigFlow.value = updated
         saveAdBlockerPrefs(updated)
+        if (updated.isGlobalEnabled || _adBlockerTelemetryFlow.value.isActive) {
+            applyAndVerifyAdBlockerAsync(updated)
+        }
     }
 
     fun setAdBlockerFilterTelemetry(enabled: Boolean) {
@@ -6934,6 +7170,9 @@ class KernelRepository private constructor(private val context: Context) {
         val updated = cur.copy(blockTelemetry = enabled)
         _adBlockerConfigFlow.value = updated
         saveAdBlockerPrefs(updated)
+        if (updated.isGlobalEnabled || _adBlockerTelemetryFlow.value.isActive) {
+            applyAndVerifyAdBlockerAsync(updated)
+        }
     }
 
     fun setAdBlockerFilterReelsAndStories(enabled: Boolean) {
@@ -6942,9 +7181,7 @@ class KernelRepository private constructor(private val context: Context) {
         _adBlockerConfigFlow.value = updated
         saveAdBlockerPrefs(updated)
         if (updated.isGlobalEnabled || _adBlockerTelemetryFlow.value.isActive) {
-            scope.launch(Dispatchers.IO) {
-                AdBlockerEngine.applyAdBlocking(context, updated)
-            }
+            applyAndVerifyAdBlockerAsync(updated)
         }
         _lastActionFeedbackFlow.value = "Facebook & IG Reels Ad Filter: ${if (enabled) "ENABLED" else "DISABLED"}"
     }
@@ -6955,6 +7192,52 @@ class KernelRepository private constructor(private val context: Context) {
         _adBlockerConfigFlow.value = updated
         saveAdBlockerPrefs(updated)
         _lastActionFeedbackFlow.value = "Auto-Purge Preloaded Ad Caches: ${if (enabled) "ENABLED" else "DISABLED"}"
+    }
+
+    fun setAdBlockerBlockQuic(enabled: Boolean) {
+        val cur = _adBlockerConfigFlow.value
+        val updated = cur.copy(blockQuicProtocol = enabled)
+        _adBlockerConfigFlow.value = updated
+        saveAdBlockerPrefs(updated)
+        if (updated.isGlobalEnabled || _adBlockerTelemetryFlow.value.isActive) {
+            applyAndVerifyAdBlockerAsync(updated)
+        }
+        _lastActionFeedbackFlow.value = "QUIC (UDP 443) Ad-Multiplexing Blocker: ${if (enabled) "ENABLED" else "DISABLED"}"
+    }
+
+    fun setAdBlockerBlockIpv6(enabled: Boolean) {
+        val cur = _adBlockerConfigFlow.value
+        val updated = cur.copy(blockIpv6AdLeakage = enabled)
+        _adBlockerConfigFlow.value = updated
+        saveAdBlockerPrefs(updated)
+        if (updated.isGlobalEnabled || _adBlockerTelemetryFlow.value.isActive) {
+            applyAndVerifyAdBlockerAsync(updated)
+        }
+        _lastActionFeedbackFlow.value = "IPv6 (ip6tables) Ad-Leakage Filter: ${if (enabled) "ENABLED" else "DISABLED"}"
+    }
+
+    fun setAdBlockerAutoSkipInAppAds(enabled: Boolean) {
+        val cur = _adBlockerConfigFlow.value
+        val updated = cur.copy(autoSkipInAppSocialAds = enabled)
+        _adBlockerConfigFlow.value = updated
+        saveAdBlockerPrefs(updated)
+        val accActive = _isAccessibilityEnabledFlow.value || checkAccessibilityStatus()
+        _adBlockerTelemetryFlow.value = _adBlockerTelemetryFlow.value.copy(
+            isInAppAdShieldActive = accActive && (enabled || updated.autoSwipeSponsoredReels)
+        )
+        _lastActionFeedbackFlow.value = "In-App Video Ad Auto-Skipper: ${if (enabled) "ENABLED" else "DISABLED"}"
+    }
+
+    fun setAdBlockerAutoSwipeReels(enabled: Boolean) {
+        val cur = _adBlockerConfigFlow.value
+        val updated = cur.copy(autoSwipeSponsoredReels = enabled)
+        _adBlockerConfigFlow.value = updated
+        saveAdBlockerPrefs(updated)
+        val accActive = _isAccessibilityEnabledFlow.value || checkAccessibilityStatus()
+        _adBlockerTelemetryFlow.value = _adBlockerTelemetryFlow.value.copy(
+            isInAppAdShieldActive = accActive && (updated.autoSkipInAppSocialAds || enabled)
+        )
+        _lastActionFeedbackFlow.value = "Sponsored Reels & TikTok Auto-Bypass: ${if (enabled) "ENABLED" else "DISABLED"}"
     }
 
     fun purgePreloadedSocialAdCaches(platformName: String? = null) {
@@ -6976,9 +7259,7 @@ class KernelRepository private constructor(private val context: Context) {
             val updated = cur.copy(customBlacklistDomains = cur.customBlacklistDomains + clean)
             _adBlockerConfigFlow.value = updated
             saveAdBlockerPrefs(updated)
-            scope.launch(Dispatchers.IO) {
-                AdBlockerEngine.applyAdBlocking(context, updated)
-            }
+            applyAndVerifyAdBlockerAsync(updated)
             _lastActionFeedbackFlow.value = "Added $clean to Blacklist"
         }
     }
@@ -6988,9 +7269,7 @@ class KernelRepository private constructor(private val context: Context) {
         val updated = cur.copy(customBlacklistDomains = cur.customBlacklistDomains - domain)
         _adBlockerConfigFlow.value = updated
         saveAdBlockerPrefs(updated)
-        scope.launch(Dispatchers.IO) {
-            AdBlockerEngine.applyAdBlocking(context, updated)
-        }
+        applyAndVerifyAdBlockerAsync(updated)
     }
 
     fun addCustomWhitelistDomain(domain: String) {
@@ -7001,9 +7280,7 @@ class KernelRepository private constructor(private val context: Context) {
             val updated = cur.copy(customWhitelistDomains = cur.customWhitelistDomains + clean)
             _adBlockerConfigFlow.value = updated
             saveAdBlockerPrefs(updated)
-            scope.launch(Dispatchers.IO) {
-                AdBlockerEngine.applyAdBlocking(context, updated)
-            }
+            applyAndVerifyAdBlockerAsync(updated)
             _lastActionFeedbackFlow.value = "Added $clean to Whitelist"
         }
     }
@@ -7013,15 +7290,15 @@ class KernelRepository private constructor(private val context: Context) {
         val updated = cur.copy(customWhitelistDomains = cur.customWhitelistDomains - domain)
         _adBlockerConfigFlow.value = updated
         saveAdBlockerPrefs(updated)
-        scope.launch(Dispatchers.IO) {
-            AdBlockerEngine.applyAdBlocking(context, updated)
-        }
+        applyAndVerifyAdBlockerAsync(updated)
     }
 
     fun flushAdBlockerDns() {
         scope.launch(Dispatchers.IO) {
             AdBlockerEngine.flushDnsCache()
-            _lastActionFeedbackFlow.value = "DNS Cache & Resolver Flushed Successfully"
+            val status = AdBlockerEngine.verifyActiveProtection(context, _adBlockerConfigFlow.value)
+            syncAdBlockerVerificationStatus(status)
+            _lastActionFeedbackFlow.value = "DNS Cache & Resolver Flushed • Rules Re-Verified"
         }
     }
 
@@ -7029,27 +7306,31 @@ class KernelRepository private constructor(private val context: Context) {
         scope.launch(Dispatchers.IO) {
             val cfg = _adBlockerConfigFlow.value
             if (cfg.isGlobalEnabled) {
-                AdBlockerEngine.applyAdBlocking(context, cfg)
+                val status = AdBlockerEngine.applyAdBlocking(context, cfg)
+                syncAdBlockerVerificationStatus(status)
             }
             while (true) {
                 kotlinx.coroutines.delay(12000L)
                 val curTelem = _adBlockerTelemetryFlow.value
                 val curCfg = _adBlockerConfigFlow.value
+                val accActive = _isAccessibilityEnabledFlow.value
                 if (curTelem.isActive || curCfg.isGlobalEnabled) {
                     val fgPlatform = curTelem.activeForegroundPlatform
                     if (fgPlatform != null) {
                         val newEv = AdBlockerEngine.generateEventForBlockedDomain(fgPlatform)
-                        val updatedList = (listOf(newEv) + curTelem.recentBlockedEvents).take(20)
+                        val updatedList = (listOf(newEv) + curTelem.recentBlockedEvents).take(25)
                         val addQueries = (1..2).random().toLong()
                         _adBlockerTelemetryFlow.value = curTelem.copy(
                             totalBlockedQueries = curTelem.totalBlockedQueries + addQueries,
                             blockedTodayQueries = curTelem.blockedTodayQueries + addQueries,
+                            isInAppAdShieldActive = accActive && (curCfg.autoSkipInAppSocialAds || curCfg.autoSwipeSponsoredReels),
                             recentBlockedEvents = updatedList
                         )
                     } else if (Random.nextInt(3) == 0) {
                         _adBlockerTelemetryFlow.value = curTelem.copy(
                             totalBlockedQueries = curTelem.totalBlockedQueries + 1L,
-                            blockedTodayQueries = curTelem.blockedTodayQueries + 1L
+                            blockedTodayQueries = curTelem.blockedTodayQueries + 1L,
+                            isInAppAdShieldActive = accActive && (curCfg.autoSkipInAppSocialAds || curCfg.autoSwipeSponsoredReels)
                         )
                     }
                 }

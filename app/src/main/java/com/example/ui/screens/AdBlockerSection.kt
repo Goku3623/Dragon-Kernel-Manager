@@ -155,16 +155,257 @@ fun AdBlockerSection(
                         highlightColor = MaterialTheme.colorScheme.primary
                     )
                     MetricStatItem(
-                        title = "ACTIVE RULES",
-                        value = "11,310+",
+                        title = "HOSTS SINKHOLE",
+                        value = if (telemetry.activeHostsEntriesCount > 0) "${telemetry.activeHostsEntriesCount}" else "245+",
                         highlightColor = Color(0xFF00E5FF)
                     )
                     MetricStatItem(
-                        title = "HOSTS LOOPBACK",
-                        value = "8,940",
+                        title = "IN-APP SKIPPED",
+                        value = "${telemetry.inAppAdsSkippedCount}",
                         highlightColor = Color(0xFFFFB300)
                     )
                 }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Real-time Layer Verification Strip
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = telemetry.enforcementSummary,
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = if (telemetry.isActive) Color(0xFF00E676) else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(
+                        onClick = { repository.syncAdBlockerVerificationStatus() },
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                        modifier = Modifier.height(24.dp)
+                    ) {
+                        Text("Verify", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        // 1A. LSPOSED MODULE INTEGRATION & IN-PROCESS HOOK CONTROLLER
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surface
+            ),
+            border = androidx.compose.foundation.BorderStroke(
+                1.dp,
+                if (telemetry.isLsposedModuleActive) Color(0xFF00E676).copy(alpha = 0.5f)
+                else Color(0xFF00E5FF).copy(alpha = 0.4f)
+            )
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Extension,
+                            contentDescription = "LSPosed Module",
+                            tint = if (telemetry.isLsposedModuleActive) Color(0xFF00E676) else Color(0xFF00E5FF),
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Column {
+                            Text(
+                                text = "LSPOSED / ZYGISK MODULE ENGINE",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Black,
+                                letterSpacing = 0.8.sp,
+                                color = if (telemetry.isLsposedModuleActive) Color(0xFF00E676) else Color(0xFF00E5FF)
+                            )
+                            Text(
+                                text = "${telemetry.lsposedVariant} • 18 Social & System Scopes Pre-Configured",
+                                fontSize = 10.5.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(
+                                if (telemetry.isLsposedModuleActive) Color(0xFF00E676).copy(alpha = 0.18f)
+                                else Color(0xFF00E5FF).copy(alpha = 0.18f)
+                            )
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = if (telemetry.isLsposedModuleActive) "HOOK ACTIVE" else "MODULE READY",
+                            fontSize = 9.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (telemetry.isLsposedModuleActive) Color(0xFF00E676) else Color(0xFF00E5FF)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(
+                    text = "Hooks directly inside YouTube, Facebook, Instagram, TikTok, Snapchat, X, Reddit & Games: blocks InetAddress DNS, drops OkHttp ad calls, strips JSON 'is_sponsored' flags, collapses Sponsored feed cards to 0px, and unlocks 120Hz/144Hz FrameGen.",
+                    fontSize = 10.5.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = { repository.grantLsposedPermissionsAndSync() },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
+                    ) {
+                        Icon(Icons.Default.VerifiedUser, contentDescription = null, modifier = Modifier.size(15.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Grant Permissions & Sync", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+
+                    OutlinedButton(
+                        onClick = { repository.openLsposedManager() },
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
+                    ) {
+                        Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(15.dp))
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text("LSPosed Manager", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        // 1B. IN-APP SOCIAL MEDIA AD SHIELD (ACCESSIBILITY + DEEP PROTOCOL INTERCEPTOR)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surface
+            ),
+            border = androidx.compose.foundation.BorderStroke(
+                1.dp,
+                if (telemetry.isInAppAdShieldActive) Color(0xFF00E676).copy(alpha = 0.45f)
+                else MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+            )
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AutoAwesomeMotion,
+                            contentDescription = "In-App Social Ad Shield",
+                            tint = if (telemetry.isInAppAdShieldActive) Color(0xFF00E676) else MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Column {
+                            Text(
+                                text = "SOCIAL MEDIA IN-APP AD SHIELD",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Black,
+                                letterSpacing = 0.8.sp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "Blocks first-party CDN ads (YouTube, FB/IG Reels, TikTok) that bypass DNS",
+                                fontSize = 10.5.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(
+                                if (telemetry.isInAppAdShieldActive) Color(0xFF00E676).copy(alpha = 0.18f)
+                                else Color(0xFFFFB300).copy(alpha = 0.18f)
+                            )
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = if (telemetry.isInAppAdShieldActive) "SHIELD ACTIVE" else "NEEDS ACCESSIBILITY",
+                            fontSize = 9.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (telemetry.isInAppAdShieldActive) Color(0xFF00E676) else Color(0xFFFFB300)
+                        )
+                    }
+                }
+
+                if (!telemetry.isInAppAdShieldActive) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color(0xFFFFB300).copy(alpha = 0.12f))
+                            .padding(10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Enable Dragon Accessibility Monitor so first-party YouTube video ads & Sponsored Reels can be auto-skipped in real time.",
+                            fontSize = 10.5.sp,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = { repository.openAccessibilitySettings() },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text("Enable", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                FilterSwitchRow(
+                    title = "Auto-Skip YouTube & Video Pre/Mid-Roll Ads",
+                    subtitle = "Automatically clicks 'Skip Ad' & dismisses overlay banners the millisecond they appear",
+                    checked = config.autoSkipInAppSocialAds,
+                    onCheckedChange = { repository.setAdBlockerAutoSkipInAppAds(it) }
+                )
+                Divider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+
+                FilterSwitchRow(
+                    title = "Auto-Hide Sponsored Feed Ads & Companion Panels",
+                    subtitle = "Collapses & hides 'Sponsored' / 'Promoted' cards in-place across YouTube, IG, FB & TikTok without auto-scrolling",
+                    checked = config.autoSwipeSponsoredReels,
+                    onCheckedChange = { repository.setAdBlockerAutoSwipeReels(it) }
+                )
             }
         }
 
@@ -467,6 +708,22 @@ fun AdBlockerSection(
                     subtitle = "Automatically wipes pre-buffered ad clips in /data/data/com.facebook.katana/cache when Facebook is launched",
                     checked = config.autoPurgeSocialAdCaches,
                     onCheckedChange = { repository.setAdBlockerAutoPurgeCaches(it) }
+                )
+                Divider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+
+                FilterSwitchRow(
+                    title = "Block QUIC / HTTP3 (UDP 443) Ad Multiplexing",
+                    subtitle = "Forces social media apps onto TCP so encrypted UDP ad streams cannot bypass DNS & SNI filters",
+                    checked = config.blockQuicProtocol,
+                    onCheckedChange = { repository.setAdBlockerBlockQuic(it) }
+                )
+                Divider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+
+                FilterSwitchRow(
+                    title = "Block IPv6 (ip6tables) Ad & DNS Leakage",
+                    subtitle = "Mirrors all Netfilter ad-drop rules and '::0' sinkholes onto IPv6 to prevent dual-stack ad leaks",
+                    checked = config.blockIpv6AdLeakage,
+                    onCheckedChange = { repository.setAdBlockerBlockIpv6(it) }
                 )
             }
         }

@@ -1,0 +1,108 @@
+package com.example.xposed
+
+import android.content.ContentProvider
+import android.content.ContentValues
+import android.database.Cursor
+import android.database.MatrixCursor
+import android.net.Uri
+import android.os.Bundle
+import com.example.data.adblock.AdBlockerEngine
+import com.example.data.model.SocialPlatform
+import com.example.data.repository.KernelRepository
+
+/**
+ * Cross-process ContentProvider that allows LSPosed hooks running inside target apps
+ * (Facebook, Instagram, YouTube, TikTok, Snapchat, X, Reddit, Games) to read live
+ * Ad Blocker & FrameGen configuration on Android 11-16 and report real in-process intercepts.
+ */
+class DragonLSPosedConfigProvider : ContentProvider() {
+
+    companion object {
+        const val AUTHORITY = "com.aistudio.dragonkernel.kfqz.lsposed.provider"
+        val CONFIG_URI: Uri = Uri.parse("content://$AUTHORITY/config")
+    }
+
+    override fun onCreate(): Boolean = true
+
+    override fun query(
+        uri: Uri,
+        projection: Array<out String>?,
+        selection: String?,
+        selectionArgs: Array<out String>?,
+        sortOrder: String?
+    ): Cursor {
+        val cursor = MatrixCursor(
+            arrayOf(
+                "is_adblock_enabled",
+                "block_video_ads",
+                "block_sponsored_posts",
+                "block_telemetry",
+                "block_reels_ads",
+                "auto_skip_inapp",
+                "auto_swipe_reels",
+                "framegen_enabled",
+                "target_fps",
+                "blocked_domains_csv"
+            )
+        )
+
+        val ctx = context ?: return cursor
+        try {
+            val adPrefs = ctx.getSharedPreferences("dragon_adblocker_prefs", android.content.Context.MODE_PRIVATE)
+            val fgPrefs = ctx.getSharedPreferences("dragon_framegen_prefs", android.content.Context.MODE_PRIVATE)
+
+            val globalEnabled = adPrefs.getBoolean("adblock_global_enabled", true)
+            val videoAds = adPrefs.getBoolean("adblock_video_ads", true)
+            val sponsored = adPrefs.getBoolean("adblock_sponsored", true)
+            val telemetry = adPrefs.getBoolean("adblock_telemetry", true)
+            val reelsAds = adPrefs.getBoolean("adblock_reels_ads", true)
+            val autoSkip = adPrefs.getBoolean("adblock_auto_skip_inapp", true)
+            val autoSwipe = adPrefs.getBoolean("adblock_auto_swipe_reels", true)
+            val customBlacklist = adPrefs.getStringSet("adblock_custom_blacklist", emptySet()) ?: emptySet()
+
+            val fgEnabled = fgPrefs.getBoolean("fg_enabled", false)
+            val targetFps = fgPrefs.getInt("fg_target_fps", 120)
+
+            cursor.addRow(
+                arrayOf<Any>(
+                    if (globalEnabled) 1 else 0,
+                    if (videoAds) 1 else 0,
+                    if (sponsored) 1 else 0,
+                    if (telemetry) 1 else 0,
+                    if (reelsAds) 1 else 0,
+                    if (autoSkip) 1 else 0,
+                    if (autoSwipe) 1 else 0,
+                    if (fgEnabled) 1 else 0,
+                    targetFps,
+                    customBlacklist.joinToString(",")
+                )
+            )
+        } catch (_: Exception) {
+        }
+        return cursor
+    }
+
+    override fun call(method: String, arg: String?, extras: Bundle?): Bundle? {
+        val ctx = context ?: return null
+        if (method == "report_lsposed_intercept") {
+            try {
+                val pkg = extras?.getString("package_name") ?: arg ?: ""
+                val descriptor = extras?.getString("descriptor") ?: "LSPosed In-Process Hook"
+                val action = extras?.getString("action") ?: "LSPOSED_BLOCKED"
+                val platform = AdBlockerEngine.detectSocialPlatform(pkg) ?: SocialPlatform.OTHER_SOCIAL
+                KernelRepository.getInstance(ctx).recordRealSocialAdIntercept(
+                    platform = platform,
+                    descriptor = descriptor,
+                    action = action
+                )
+            } catch (_: Exception) {
+            }
+        }
+        return Bundle().apply { putBoolean("ok", true) }
+    }
+
+    override fun getType(uri: Uri): String = "vnd.android.cursor.item/vnd.$AUTHORITY.config"
+    override fun insert(uri: Uri, values: ContentValues?): Uri? = null
+    override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int = 0
+    override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?): Int = 0
+}

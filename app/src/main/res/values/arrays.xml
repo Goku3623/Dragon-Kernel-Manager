@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Official LSPosed Recommended Scope (auto-selected when enabling module in LSPosed Manager) -->
+    <string-array name="xposed_scope">
+        <item>android</item>
+        <item>com.android.systemui</item>
+        <!-- YouTube & Video Platforms -->
+        <item>com.google.android.youtube</item>
+        <item>com.google.android.apps.youtube.music</item>
+        <item>app.revanced.android.youtube</item>
+        <item>tv.twitch.android.app</item>
+        <!-- Facebook & Meta -->
+        <item>com.facebook.katana</item>
+        <item>com.facebook.lite</item>
+        <item>com.facebook.orca</item>
+        <!-- Instagram & Threads -->
+        <item>com.instagram.android</item>
+        <item>com.instagram.lite</item>
+        <item>com.instagram.barcelona</item>
+        <!-- TikTok -->
+        <item>com.zhiliaoapp.musically</item>
+        <item>com.ss.android.ugc.trill</item>
+        <item>com.zhiliaoapp.musically.go</item>
+        <!-- Snapchat -->
+        <item>com.snapchat.android</item>
+        <!-- X / Twitter, Reddit, Pinterest -->
+        <item>com.twitter.android</item>
+        <item>com.reddit.frontpage</item>
+        <item>com.pinterest</item>
+    </string-array>
+</resources>

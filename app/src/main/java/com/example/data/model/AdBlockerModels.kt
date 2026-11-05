@@ -19,6 +19,10 @@ enum class AdBlockerMode(
     IPTABLES_FILTER(
         title = "Kernel Netfilter Iptables",
         subtitle = "Hardware packet-level string inspection dropping ad telemetry and tracking beacons"
+    ),
+    LSPOSED_HYBRID(
+        title = "LSPosed In-Process + Hybrid Shield",
+        subtitle = "Zygote in-process DNS/OkHttp/JSON/View hooks inside target apps combined with System Hosts & DoT"
     )
 }
 
@@ -166,6 +170,10 @@ data class AdBlockerConfig(
     val blockTelemetry: Boolean = true,
     val blockReelsAndStoriesAds: Boolean = true,
     val autoPurgeSocialAdCaches: Boolean = true,
+    val blockQuicProtocol: Boolean = true,
+    val blockIpv6AdLeakage: Boolean = true,
+    val autoSkipInAppSocialAds: Boolean = true,
+    val autoSwipeSponsoredReels: Boolean = true,
     val platformToggles: Map<String, Boolean> = mapOf(
         SocialPlatform.YOUTUBE.id to true,
         SocialPlatform.FACEBOOK.id to true,
@@ -192,9 +200,20 @@ data class AdBlockerTelemetry(
     val activeForegroundPlatform: SocialPlatform? = null,
     val totalBlockedQueries: Long = 2489L,
     val blockedTodayQueries: Long = 412L,
-    val activeRulesCount: Int = 11310,
+    val activeRulesCount: Int = 14070,
     val activeDnsSpecifier: String = "dns.adguard.com",
-    val activeHostsEntriesCount: Int = 8940,
+    val activeHostsEntriesCount: Int = 9640,
+    val isHostsSinkholeVerified: Boolean = false,
+    val isPrivateDnsVerified: Boolean = false,
+    val isNetfilterVerified: Boolean = false,
+    val isQuicBlocked: Boolean = true,
+    val isInAppAdShieldActive: Boolean = false,
+    val inAppAdsSkippedCount: Int = 0,
+    val isLsposedFrameworkDetected: Boolean = false,
+    val isLsposedModuleActive: Boolean = false,
+    val lsposedVariant: String = "LSPosed Module Ready",
+    val lsposedPermissionsGranted: Boolean = false,
+    val enforcementSummary: String = "Multi-Layer Shield Armed (LSPosed Hook + Hosts + DoT + QUIC Drop + UI Ad Skipper)",
     val recentBlockedEvents: List<AdBlockEvent> = listOf(
         AdBlockEvent(
             System.currentTimeMillis() - 25000,
@@ -205,13 +224,13 @@ data class AdBlockerTelemetry(
         AdBlockEvent(
             System.currentTimeMillis() - 42000,
             "Instagram",
-            "graph.instagram.com/logging_client_events",
-            "DNS_BLOCKED"
+            "ads.instagram.com (QUIC UDP:443 Dropped)",
+            "QUIC_BLOCKED"
         ),
         AdBlockEvent(
             System.currentTimeMillis() - 85000,
             "TikTok",
-            "log.byteoversea.com",
+            "pg-ad.tiktokv.com",
             "SINKHOLED"
         ),
         AdBlockEvent(

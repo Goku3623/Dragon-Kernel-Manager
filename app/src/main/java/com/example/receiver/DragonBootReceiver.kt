@@ -23,7 +23,11 @@ class DragonBootReceiver : BroadcastReceiver() {
             CoroutineScope(Dispatchers.IO).launch {
                 try {
                     val repo = KernelRepository.getInstance(context.applicationContext)
-                    repo.tickTelemetry()
+                    if (action == Intent.ACTION_BOOT_COMPLETED && repo.freshStartConfigFlow.value.autoFreshStartOnBoot) {
+                        repo.startFreshTelemetrySession(reason = "Device Boot")
+                    } else {
+                        repo.tickTelemetry()
+                    }
                     if (repo.chargingControlsFlow.value.bypassThermalLimit) {
                         repo.forceRootBypassThermalLimit()
                     }
