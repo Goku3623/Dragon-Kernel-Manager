@@ -438,7 +438,7 @@ data class ChargingControls(
     val lockSysfsNodesReadOnly: Boolean = true, // Locks constant_charge_current_max (chmod 0444) so ROM cannot reset it
     val overrideRomThermalDaemon: Boolean = true, // Overrides mi_thermald / system_temp_level
     val forcePmicVoterOverride: Boolean = true, // Forces Qualcomm PMIC FCC & USB_ICL hardware votables
-    val activeOverrideStatus: String = "Active Preset: HyperCharge 90W (20,000 mA / 90W Max)",
+    val activeOverrideStatus: String = "ROM Default Charging Speed & Thermal Active",
     val lastRootOverrideCommand: String = "/sys/class/power_supply/battery/constant_charge_current_max",
     val bypassHardwareVerified: Boolean = false,
     val bypassStatusText: String = "Standby • Normal Battery Charging",

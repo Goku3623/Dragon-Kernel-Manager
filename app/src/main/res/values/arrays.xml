@@ -23,9 +23,12 @@
         <item>com.zhiliaoapp.musically.go</item>
         <!-- Snapchat -->
         <item>com.snapchat.android</item>
-        <!-- X / Twitter, Reddit, Pinterest -->
+        <!-- X / Twitter, Reddit, Pinterest, Browsers -->
         <item>com.twitter.android</item>
+        <item>com.twitter.android.lite</item>
         <item>com.reddit.frontpage</item>
         <item>com.pinterest</item>
+        <item>com.android.chrome</item>
+        <item>com.sec.android.app.sbrowser</item>
     </string-array>
 </resources>

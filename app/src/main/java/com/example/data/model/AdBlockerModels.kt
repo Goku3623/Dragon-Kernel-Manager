@@ -174,6 +174,11 @@ data class AdBlockerConfig(
     val blockIpv6AdLeakage: Boolean = true,
     val autoSkipInAppSocialAds: Boolean = true,
     val autoSwipeSponsoredReels: Boolean = true,
+    val xposedHookLithoAndViews: Boolean = true,
+    val xposedHookYoutubeAndVideoAds: Boolean = true,
+    val xposedHookMobileAdSdks: Boolean = true,
+    val xposedHookNetworkAndWebView: Boolean = true,
+    val xposedHookJsonAndGraphQl: Boolean = true,
     val platformToggles: Map<String, Boolean> = mapOf(
         SocialPlatform.YOUTUBE.id to true,
         SocialPlatform.FACEBOOK.id to true,
@@ -209,11 +214,13 @@ data class AdBlockerTelemetry(
     val isQuicBlocked: Boolean = true,
     val isInAppAdShieldActive: Boolean = false,
     val inAppAdsSkippedCount: Int = 0,
+    val xposedAdsHookedCount: Int = 0,
+    val activeXposedHookLayers: Int = 5,
     val isLsposedFrameworkDetected: Boolean = false,
     val isLsposedModuleActive: Boolean = false,
     val lsposedVariant: String = "LSPosed Module Ready",
     val lsposedPermissionsGranted: Boolean = false,
-    val enforcementSummary: String = "Multi-Layer Shield Armed (LSPosed Hook + Hosts + DoT + QUIC Drop + UI Ad Skipper)",
+    val enforcementSummary: String = "Multi-Layer Shield Armed (LSPosed 5-Layer Hook + Hosts + DoT + QUIC Drop)",
     val recentBlockedEvents: List<AdBlockEvent> = listOf(
         AdBlockEvent(
             System.currentTimeMillis() - 25000,

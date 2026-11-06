@@ -198,7 +198,7 @@ fun AdBlockerSection(
             }
         }
 
-        // 1A. LSPOSED MODULE INTEGRATION & IN-PROCESS HOOK CONTROLLER
+        // 1A. XPOSED / LSPOSED 5-LAYER ADS HOOK ENGINE CONTROLLER
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
@@ -207,8 +207,8 @@ fun AdBlockerSection(
             ),
             border = androidx.compose.foundation.BorderStroke(
                 1.dp,
-                if (telemetry.isLsposedModuleActive) Color(0xFF00E676).copy(alpha = 0.5f)
-                else Color(0xFF00E5FF).copy(alpha = 0.4f)
+                if (telemetry.isLsposedModuleActive) Color(0xFF00E676).copy(alpha = 0.55f)
+                else Color(0xFF00E5FF).copy(alpha = 0.45f)
             )
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
@@ -219,24 +219,25 @@ fun AdBlockerSection(
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.weight(1f)
                     ) {
                         Icon(
                             imageVector = Icons.Default.Extension,
-                            contentDescription = "LSPosed Module",
+                            contentDescription = "Xposed Ads Hook Engine",
                             tint = if (telemetry.isLsposedModuleActive) Color(0xFF00E676) else Color(0xFF00E5FF),
                             modifier = Modifier.size(20.dp)
                         )
                         Column {
                             Text(
-                                text = "LSPOSED / ZYGISK MODULE ENGINE",
+                                text = "XPOSED FRAMEWORK ADS HOOK ENGINE",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Black,
                                 letterSpacing = 0.8.sp,
                                 color = if (telemetry.isLsposedModuleActive) Color(0xFF00E676) else Color(0xFF00E5FF)
                             )
                             Text(
-                                text = "${telemetry.lsposedVariant} • 18 Social & System Scopes Pre-Configured",
+                                text = "${telemetry.lsposedVariant} • ${telemetry.activeXposedHookLayers}/5 Hook Layers Armed • ${telemetry.xposedAdsHookedCount} Hooked",
                                 fontSize = 10.5.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -264,9 +265,50 @@ fun AdBlockerSection(
                 Spacer(modifier = Modifier.height(10.dp))
 
                 Text(
-                    text = "Hooks directly inside YouTube, Facebook, Instagram, TikTok, Snapchat, X, Reddit & Games: blocks InetAddress DNS, drops OkHttp ad calls, strips JSON 'is_sponsored' flags, collapses Sponsored feed cards to 0px, and unlocks 120Hz/144Hz FrameGen.",
+                    text = "In-process Zygote bytecode hooks inside YouTube, Instagram, Facebook, TikTok, Snapchat, X, Reddit & Games. Intercepts ads inside app memory before rendering.",
                     fontSize = 10.5.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                FilterSwitchRow(
+                    title = "1. Litho Protobuf & 0px Sponsored Card Hook",
+                    subtitle = "Hooks StringBuilder Litho templates (sparkles_ad, promoted_video), StaticLayout & View.measure(0,0) in-place without scrolling",
+                    checked = config.xposedHookLithoAndViews,
+                    onCheckedChange = { repository.setXposedHookLithoAndViews(it) }
+                )
+                Divider(modifier = Modifier.padding(vertical = 7.dp), color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+
+                FilterSwitchRow(
+                    title = "2. YouTube Player adPlacements & Video Ad Hook",
+                    subtitle = "Strips YouTube playerAds/adPlacements arrays, fast-forwards video ad SeekBars & auto-clicks skip_ad_button in <50ms",
+                    checked = config.xposedHookYoutubeAndVideoAds,
+                    onCheckedChange = { repository.setXposedHookYoutubeAndVideoAds(it) }
+                )
+                Divider(modifier = Modifier.padding(vertical = 7.dp), color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+
+                FilterSwitchRow(
+                    title = "3. In-Process DNS, Cronet, OkHttp3 & WebView Hook",
+                    subtitle = "Hooks InetAddress, Chromium CronetEngine QUIC streams, OkHttp3 Request.Builder & WebViewClient.shouldInterceptRequest",
+                    checked = config.xposedHookNetworkAndWebView,
+                    onCheckedChange = { repository.setXposedHookNetworkAndWebView(it) }
+                )
+                Divider(modifier = Modifier.padding(vertical = 7.dp), color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+
+                FilterSwitchRow(
+                    title = "4. JSON & GraphQL Sponsored Payload Stripper",
+                    subtitle = "Hooks JSONObject.optBoolean/has/optJSONArray to strip is_sponsored, is_ad, is_promoted & sponsored_data flags",
+                    checked = config.xposedHookJsonAndGraphQl,
+                    onCheckedChange = { repository.setXposedHookJsonAndGraphQl(it) }
+                )
+                Divider(modifier = Modifier.padding(vertical = 7.dp), color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+
+                FilterSwitchRow(
+                    title = "5. Mobile Ad SDK Method Nullifier (AdMob / Meta / Unity)",
+                    subtitle = "Nullifies loadAd() & show() in Google AdMob, Facebook Audience Network, UnityAds, AppLovin MAX & IronSource",
+                    checked = config.xposedHookMobileAdSdks,
+                    onCheckedChange = { repository.setXposedHookMobileAdSdks(it) }
                 )
 
                 Spacer(modifier = Modifier.height(12.dp))
@@ -283,7 +325,7 @@ fun AdBlockerSection(
                     ) {
                         Icon(Icons.Default.VerifiedUser, contentDescription = null, modifier = Modifier.size(15.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Grant Permissions & Sync", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text("Sync Scope & Permissions", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
 
                     OutlinedButton(

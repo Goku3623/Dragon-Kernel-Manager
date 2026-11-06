@@ -18,7 +18,7 @@ import com.example.data.repository.KernelRepository
 class DragonLSPosedConfigProvider : ContentProvider() {
 
     companion object {
-        const val AUTHORITY = "com.aistudio.dragonkernel.kfqz.lsposed.provider"
+        const val AUTHORITY = "com.android.dragontools.lsposed.provider"
         val CONFIG_URI: Uri = Uri.parse("content://$AUTHORITY/config")
     }
 
@@ -42,7 +42,12 @@ class DragonLSPosedConfigProvider : ContentProvider() {
                 "auto_swipe_reels",
                 "framegen_enabled",
                 "target_fps",
-                "blocked_domains_csv"
+                "blocked_domains_csv",
+                "xposed_hook_litho",
+                "xposed_hook_youtube_video",
+                "xposed_hook_ad_sdks",
+                "xposed_hook_network_webview",
+                "xposed_hook_json_graphql"
             )
         )
 
@@ -60,6 +65,12 @@ class DragonLSPosedConfigProvider : ContentProvider() {
             val autoSwipe = adPrefs.getBoolean("adblock_auto_swipe_reels", true)
             val customBlacklist = adPrefs.getStringSet("adblock_custom_blacklist", emptySet()) ?: emptySet()
 
+            val hookLitho = adPrefs.getBoolean("adblock_xposed_litho", true)
+            val hookYtVideo = adPrefs.getBoolean("adblock_xposed_yt_video", true)
+            val hookAdSdks = adPrefs.getBoolean("adblock_xposed_ad_sdks", true)
+            val hookNetWebView = adPrefs.getBoolean("adblock_xposed_net_webview", true)
+            val hookJsonGraphQl = adPrefs.getBoolean("adblock_xposed_json_graphql", true)
+
             val fgEnabled = fgPrefs.getBoolean("fg_enabled", false)
             val targetFps = fgPrefs.getInt("fg_target_fps", 120)
 
@@ -74,7 +85,12 @@ class DragonLSPosedConfigProvider : ContentProvider() {
                     if (autoSwipe) 1 else 0,
                     if (fgEnabled) 1 else 0,
                     targetFps,
-                    customBlacklist.joinToString(",")
+                    customBlacklist.joinToString(","),
+                    if (hookLitho) 1 else 0,
+                    if (hookYtVideo) 1 else 0,
+                    if (hookAdSdks) 1 else 0,
+                    if (hookNetWebView) 1 else 0,
+                    if (hookJsonGraphQl) 1 else 0
                 )
             )
         } catch (_: Exception) {

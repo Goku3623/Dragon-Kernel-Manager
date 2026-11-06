@@ -861,14 +861,74 @@ object RootHelper {
         externalBypassActive: Boolean = false
     ): CommandResult = withContext(Dispatchers.IO) {
         refreshRootStatus()
-        val baseCeilingMa = (if (enabled) currentMa else fallbackSpeedModeMa).coerceIn(500, 20000)
+        if (!enabled) {
+            val restoreScript = """
+                for node in \
+                    /sys/class/power_supply/battery/constant_charge_current_max \
+                    /sys/class/power_supply/battery/constant_charge_current \
+                    /sys/class/power_supply/battery/input_current_limit \
+                    /sys/class/power_supply/battery/current_max \
+                    /sys/class/power_supply/battery/thermal_input_current \
+                    /sys/class/power_supply/battery/fastchg_current \
+                    /sys/class/power_supply/bms/constant_charge_current_max \
+                    /sys/class/power_supply/main/constant_charge_current_max \
+                    /sys/class/power_supply/main/current_max \
+                    /sys/class/power_supply/bbc/constant_charge_current_max \
+                    /sys/class/power_supply/cp_master/constant_charge_current_max \
+                    /sys/class/power_supply/cp_slave/constant_charge_current_max \
+                    /sys/class/qcom-battery/constant_charge_current_max \
+                    /sys/class/qcom-battery/fcc_max \
+                    /sys/class/qcom-battery/input_current_limit \
+                    /sys/class/power_supply/usb/current_max \
+                    /sys/class/power_supply/usb/input_current_limit \
+                    /sys/class/power_supply/battery/temp_warm \
+                    /sys/class/power_supply/battery/jeita_warm_temp \
+                    /sys/class/power_supply/battery/system_temp_level \
+                    /sys/class/power_supply/battery/charge_control_limit \
+                    /sys/class/qcom-battery/system_temp_level \
+                    /sys/class/power_supply/battery/restrict_cur \
+                    /sys/class/power_supply/battery/restrict_chg \
+                    /sys/class/qcom-battery/restrict_cur \
+                    /sys/class/qcom-battery/restrict_chg; do
+                    if [ -e "${'$'}node" ]; then
+                        chattr -i "${'$'}node" 2>/dev/null || true
+                        chmod 0664 "${'$'}node" 2>/dev/null || true
+                    fi
+                done
+                for rnode in /sys/class/power_supply/battery/restrict_chg /sys/class/qcom-battery/restrict_chg; do
+                    [ -e "${'$'}rnode" ] && echo 0 > "${'$'}rnode" 2>/dev/null || true
+                done
+                for snode in \
+                    /sys/class/power_supply/battery/step_charging_enabled \
+                    /sys/class/power_supply/battery/sw_jeita_enabled \
+                    /sys/class/qcom-battery/step_charging_enabled \
+                    /sys/class/qcom-battery/sw_jeita_enabled; do
+                    if [ -e "${'$'}snode" ]; then
+                        chattr -i "${'$'}snode" 2>/dev/null || true
+                        chmod 0664 "${'$'}snode" 2>/dev/null || true
+                        echo 1 > "${'$'}snode" 2>/dev/null || true
+                    fi
+                done
+                if ! ${if (externalBypassActive) "true" else "false"}; then
+                    for pnode in /sys/class/power_supply/battery/input_suspend /sys/class/qcom-battery/input_suspend /sys/class/power_supply/battery/charge_disable; do
+                        [ -e "${'$'}pnode" ] && { chattr -i "${'$'}pnode" 2>/dev/null; chmod 0664 "${'$'}pnode" 2>/dev/null; echo 0 > "${'$'}pnode" 2>/dev/null; } || true
+                    done
+                    for invnode in /sys/class/power_supply/battery/charging_enabled /sys/class/power_supply/battery/battery_charging_enabled /sys/class/qcom-battery/charging_enabled; do
+                        [ -e "${'$'}invnode" ] && { chattr -i "${'$'}invnode" 2>/dev/null; chmod 0664 "${'$'}invnode" 2>/dev/null; echo 1 > "${'$'}invnode" 2>/dev/null; } || true
+                    done
+                fi
+                echo "ROM_DEFAULT_RESTORED -> Unlocked charging & thermal sysfs nodes for ROM default speed"
+            """.trimIndent()
+            return@withContext executeCommand(restoreScript)
+        }
+
+        val baseCeilingMa = currentMa.coerceIn(500, 20000)
         val safeFallbackMa = fallbackCurrentMa.coerceIn(500, baseCeilingMa)
 
         val shouldPauseForTemp = enabled && customTempLimitEnabled && isTempThrottlingTriggered &&
                 thermalMode == "PAUSE_UNTIL_COOLED"
 
         val effectiveMa = when {
-            !enabled -> fallbackSpeedModeMa.coerceIn(500, 20000)
             shouldPauseForTemp -> 0
             customTempLimitEnabled && isTempThrottlingTriggered -> {
                 when (thermalMode) {

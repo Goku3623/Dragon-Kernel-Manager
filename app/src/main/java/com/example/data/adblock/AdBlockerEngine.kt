@@ -25,11 +25,9 @@ object AdBlockerEngine {
     private const val TAG = "AdBlockerEngine"
     private const val TMP_HOSTS_PATH = "/data/local/tmp/hosts_adblock"
 
-    // Pure hostnames (no URL paths) so 100% of entries resolve in /etc/hosts and DNS sinkholes
+    // Pure third-party & dedicated ad hostnames (never blocks core app startup/API/CDN domains)
     val YOUTUBE_DOMAINS = listOf(
         "ads.youtube.com",
-        "s.youtube.com",
-        "video-stats.l.google.com",
         "pagead2.googlesyndication.com",
         "pagead2.googleadservices.com",
         "tpc.googlesyndication.com",
@@ -53,12 +51,11 @@ object AdBlockerEngine {
         "www.googleadservices.com",
         "googleadservices.com",
         "fundingchoicesmessages.google.com",
-        "csi.gstatic.com",
         "youtube.cleverads.vn",
         "ads-ookla.youtube.com"
     )
 
-    // Safe, targeted Facebook & Messenger ad/pixel/Reels-ad domains (never blocks graph.facebook.com or edge-chat)
+    // Safe, targeted Facebook & Messenger ad/pixel domains (never blocks graph, lookaside, or c10r router)
     val FACEBOOK_DOMAINS = listOf(
         "an.facebook.com",
         "audience-network.facebook.com",
@@ -71,33 +68,23 @@ object AdBlockerEngine {
         "pixel.facebook.com",
         "tr.facebook.com",
         "analytics.facebook.com",
-        "logging.facebook.com",
-        "events.facebook.com",
-        "creative.ak.fbcdn.net",
         "an.meta.com",
         "ads.meta.com",
         "pixel.meta.com",
         "meta.pixel.com",
         "ad.atdmt.com",
-        " liverail.com",
-        "ads.liverail.com",
-        "lookaside.fbsbx.com",
-        "graph-fallback.facebook.com",
-        "error.facebook.com",
-        "b-graph-fallback.facebook.com"
-    ).map { it.trim() }
+        "liverail.com",
+        "ads.liverail.com"
+    )
 
     val INSTAGRAM_DOMAINS = listOf(
         "ads.instagram.com",
-        "logging.instagram.com",
-        "instagram.c10r.facebook.com",
         "ads-api.instagram.com",
         "an.instagram.com",
         "pixel.instagram.com",
         "tr.instagram.com",
         "analytics.instagram.com",
-        "telemetry.instagram.com",
-        "graph-Differentiated.instagram.com"
+        "telemetry.instagram.com"
     )
 
     val TIKTOK_DOMAINS = listOf(
@@ -109,25 +96,13 @@ object AdBlockerEngine {
         "business-api.tiktok.com",
         "analytics.tiktok.com",
         "analytics-sg.tiktok.com",
-        "mon.tiktokv.com",
-        "mon-va.tiktokv.com",
-        "mon-sg.tiktokv.com",
-        "log.byteoversea.com",
-        "toblog.byteoversea.com",
         "pg-ad.tiktokv.com",
-        "rtlog.tiktokv.com",
-        "log.tiktokv.com",
-        "log-va.tiktokv.com",
-        "mon.musical.ly",
-        "mcs.snssdk.com",
-        "sf16-muse-va.ibytedtos.com",
         "p16-ad-sg.ibyteimg.com",
         "p16-ad-va.ibyteimg.com",
         "pangolin-sdk-toutiao.com",
         "api-access.pangolin-sdk-toutiao.com",
         "log-api.pangolin-sdk-toutiao.com",
-        "ad.zijieapi.com",
-        "log.zijieapi.com"
+        "ad.zijieapi.com"
     )
 
     val SNAPCHAT_DOMAINS = listOf(
@@ -138,7 +113,6 @@ object AdBlockerEngine {
         "app-analytics.snapchat.com",
         "sc-analytics.appspot.com",
         "analytics.snapchat.com",
-        "shadow.snapchat.com",
         "ads-api.snapchat.com",
         "pixel.snapchat.com",
         "usc.adserver.snapads.com",
@@ -455,10 +429,9 @@ EOF
                     break
                 fi
             done
-            if ! grep -q "Dragon Tools" /system/etc/hosts 2>/dev/null; then
-                mount -o bind $TMP_HOSTS_PATH /system/etc/hosts 2>/dev/null || true
-            fi
-            su -M -c "grep -q 'Dragon Tools' /system/etc/hosts 2>/dev/null || mount -o bind $TMP_HOSTS_PATH /system/etc/hosts 2>/dev/null" 2>/dev/null || true
+            umount -l /system/etc/hosts 2>/dev/null || true
+            mount -o bind $TMP_HOSTS_PATH /system/etc/hosts 2>/dev/null || true
+            su -M -c "umount -l /system/etc/hosts 2>/dev/null; mount -o bind $TMP_HOSTS_PATH /system/etc/hosts 2>/dev/null" 2>/dev/null || true
         """.trimIndent()
 
         RootHelper.executeCommand(script)
@@ -495,28 +468,13 @@ EOF
             cmdBuilder.append("ip6tables -C OUTPUT -j DRAGON_ADBLOCK 2>/dev/null || ip6tables -I OUTPUT 1 -j DRAGON_ADBLOCK 2>/dev/null\n")
         }
 
-        // 1. For social media app UIDs:
-        //    a) Block QUIC / HTTP3 (UDP port 443) so encrypted UDP ad streams cannot bypass TCP/DNS filters.
-        //    b) Block in-app hardcoded DNS resolvers (YouTube Cronet & Meta Proxygen querying 8.8.8.8/8.8.4.4/1.1.1.1:53 directly),
-        //       forcing the app to fall back to Android's netd system resolver (which enforces /system/etc/hosts & AdGuard Private DNS!).
-        if (socialUids.isNotEmpty()) {
+        // 1. For social media app UIDs, reject QUIC (UDP 443) ONLY with instant ICMP port-unreachable
+        //    (never -j DROP, which causes 30s connection timeouts at app startup).
+        if (config.blockQuicProtocol && socialUids.isNotEmpty()) {
             for (uid in socialUids) {
-                if (config.blockQuicProtocol) {
-                    cmdBuilder.append("iptables -A DRAGON_ADBLOCK -p udp --dport 443 -m owner --uid-owner $uid -j REJECT 2>/dev/null || iptables -A DRAGON_ADBLOCK -p udp --dport 443 -m owner --uid-owner $uid -j DROP 2>/dev/null\n")
-                    if (config.blockIpv6AdLeakage) {
-                        cmdBuilder.append("ip6tables -A DRAGON_ADBLOCK -p udp --dport 443 -m owner --uid-owner $uid -j REJECT 2>/dev/null || ip6tables -A DRAGON_ADBLOCK -p udp --dport 443 -m owner --uid-owner $uid -j DROP 2>/dev/null\n")
-                    }
-                }
-                // Force app UID off direct hardcoded DNS (netd is UID 1051/0 so system DNS is untouched)
-                for (dnsIp in listOf("8.8.8.8", "8.8.4.4", "1.1.1.1", "1.0.0.1")) {
-                    cmdBuilder.append("iptables -A DRAGON_ADBLOCK -d $dnsIp -p udp --dport 53 -m owner --uid-owner $uid -j REJECT 2>/dev/null || iptables -A DRAGON_ADBLOCK -d $dnsIp -p udp --dport 53 -m owner --uid-owner $uid -j DROP 2>/dev/null\n")
-                    cmdBuilder.append("iptables -A DRAGON_ADBLOCK -d $dnsIp -p tcp --dport 53 -m owner --uid-owner $uid -j REJECT 2>/dev/null || iptables -A DRAGON_ADBLOCK -d $dnsIp -p tcp --dport 53 -m owner --uid-owner $uid -j DROP 2>/dev/null\n")
-                }
+                cmdBuilder.append("iptables -A DRAGON_ADBLOCK -p udp --dport 443 -m owner --uid-owner $uid -j REJECT --reject-with icmp-port-unreachable 2>/dev/null\n")
                 if (config.blockIpv6AdLeakage) {
-                    for (dnsIp6 in listOf("2001:4860:4860::8888", "2001:4860:4860::8844")) {
-                        cmdBuilder.append("ip6tables -A DRAGON_ADBLOCK -d $dnsIp6 -p udp --dport 53 -m owner --uid-owner $uid -j DROP 2>/dev/null\n")
-                        cmdBuilder.append("ip6tables -A DRAGON_ADBLOCK -d $dnsIp6 -p tcp --dport 53 -m owner --uid-owner $uid -j DROP 2>/dev/null\n")
-                    }
+                    cmdBuilder.append("ip6tables -A DRAGON_ADBLOCK -p udp --dport 443 -m owner --uid-owner $uid -j REJECT --reject-with icmp6-port-unreachable 2>/dev/null\n")
                 }
             }
         }

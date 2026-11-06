@@ -672,7 +672,7 @@ class KernelRepository private constructor(private val context: Context) {
                 activeOverrideStatus = if (manualLimiterEnabled) {
                     "Custom Current Limiter Active: $limitMa mA Max Ceiling"
                 } else {
-                    "Active Preset: ${speedMode.label} (${speedMode.maxCurrentMa} mA / ${speedMode.maxWattage}W Max)"
+                    "ROM Default Charging Speed & Thermal Active"
                 },
                 nightCharging = loadedNight,
                 bypassThermalLimit = prefs.getBoolean("bypass_thermal_limit", false),
@@ -1909,9 +1909,7 @@ class KernelRepository private constructor(private val context: Context) {
                 (isNightTargetReached && night.autoBypassAtTarget) ||
                 isNightThermalPaused
         val needThermalBypass = charging.bypassThermalLimit
-        val shouldEnforceCurrentCeiling = forceImmediate ||
-                bat.isCharging ||
-                charging.manualCurrentLimiterEnabled ||
+        val shouldEnforceCurrentCeiling = charging.manualCurrentLimiterEnabled ||
                 isNightWindowOpen ||
                 lastEnforcedNightActiveState == true
 
@@ -1942,7 +1940,8 @@ class KernelRepository private constructor(private val context: Context) {
                 lastEnforcedBypassState = false
             }
 
-            if (isNightWindowOpen || lastEnforcedNightActiveState == true || forceImmediate) {
+            val wasNightActive = lastEnforcedNightActiveState == true
+            if (isNightWindowOpen || wasNightActive || forceImmediate) {
                 RootHelper.enforceRootNightCharging(
                     packageName = context.packageName,
                     enabled = night.isEnabled,
@@ -1958,7 +1957,7 @@ class KernelRepository private constructor(private val context: Context) {
                 val targetMa = if (charging.manualCurrentLimiterEnabled) {
                     charging.manualCurrentLimitMa
                 } else {
-                    charging.speedMode.maxCurrentMa
+                    20000
                 }
                 RootHelper.enforceRootBypassThermalLimit(
                     packageName = context.packageName,
@@ -1968,7 +1967,7 @@ class KernelRepository private constructor(private val context: Context) {
                 )
             }
 
-            if (shouldEnforceCurrentCeiling) {
+            if (isNightWindowOpen || charging.manualCurrentLimiterEnabled) {
                 val nightTargetMa = if (isTopUpPhase) {
                     min(1800, night.trickleCurrentMa + 400)
                 } else {
@@ -1976,8 +1975,7 @@ class KernelRepository private constructor(private val context: Context) {
                 }
                 val targetMa = when {
                     isNightWindowOpen -> nightTargetMa
-                    charging.manualCurrentLimiterEnabled -> charging.manualCurrentLimitMa
-                    else -> charging.speedMode.maxCurrentMa
+                    else -> charging.manualCurrentLimitMa
                 }.coerceIn(500, 20000)
 
                 val nightTempLimitEnabled = isNightWindowOpen || (charging.manualCurrentLimiterEnabled && charging.customTempLimitEnabled)
@@ -1988,7 +1986,7 @@ class KernelRepository private constructor(private val context: Context) {
                     packageName = context.packageName,
                     enabled = true,
                     currentMa = targetMa,
-                    fallbackSpeedModeMa = if (isNightWindowOpen) targetMa else max(charging.speedMode.maxCurrentMa, targetMa),
+                    fallbackSpeedModeMa = targetMa,
                     lockReadOnly = charging.lockSysfsNodesReadOnly,
                     overrideThermalDaemon = charging.overrideRomThermalDaemon || charging.bypassThermalLimit,
                     forcePmicVoter = charging.forcePmicVoterOverride || isNightWindowOpen,
@@ -1999,6 +1997,14 @@ class KernelRepository private constructor(private val context: Context) {
                     fallbackCurrentMa = effectiveFallbackMa,
                     cooldownDeltaC = if (isNightWindowOpen) 1.5f else charging.customTempCooldownDeltaC,
                     isTempThrottlingTriggered = isNightThermalPaused || charging.isCustomTempThrottlingActive,
+                    externalBypassActive = false
+                )
+            } else if (wasNightActive && !charging.bypassThermalLimit) {
+                // Night charging window just ended and Custom Current Limiter is OFF: restore ROM default speed & thermal
+                RootHelper.enforceRootChargingCurrentLimit(
+                    packageName = context.packageName,
+                    enabled = false,
+                    currentMa = 20000,
                     externalBypassActive = false
                 )
             }
@@ -3973,12 +3979,12 @@ class KernelRepository private constructor(private val context: Context) {
             val granted = RootHelper.grantAllNecessaryPermissions(context.packageName, getPeakSupportedRefreshRate())
             _isRootGrantedFlow.value = granted || RootHelper.isRootAvailable
             val cur = _chargingControlsFlow.value
-            val targetMa = if (cur.manualCurrentLimiterEnabled) cur.manualCurrentLimitMa else cur.speedMode.maxCurrentMa
+            val targetMa = if (cur.manualCurrentLimiterEnabled) cur.manualCurrentLimitMa else 20000
             RootHelper.enforceRootChargingCurrentLimit(
                 packageName = context.packageName,
-                enabled = true,
+                enabled = cur.manualCurrentLimiterEnabled,
                 currentMa = targetMa,
-                fallbackSpeedModeMa = max(cur.speedMode.maxCurrentMa, targetMa),
+                fallbackSpeedModeMa = targetMa,
                 lockReadOnly = cur.lockSysfsNodesReadOnly,
                 overrideThermalDaemon = cur.overrideRomThermalDaemon || cur.bypassThermalLimit,
                 forcePmicVoter = cur.forcePmicVoterOverride,
@@ -4514,7 +4520,7 @@ class KernelRepository private constructor(private val context: Context) {
                 )
         val safeFallbackMa = min(clampedMa, cur.customTempFallbackCurrentMa)
         val effectiveMa = when {
-            !enabled -> cur.speedMode.maxCurrentMa
+            !enabled -> clampedMa
             !cur.customTempLimitEnabled || !isTempTriggered -> clampedMa
             cur.customTempThermalMode == CurrentLimiterThermalMode.PAUSE_UNTIL_COOLED -> 0
             cur.customTempThermalMode == CurrentLimiterThermalMode.SMART_STEP_DOWN -> safeFallbackMa
@@ -4529,7 +4535,7 @@ class KernelRepository private constructor(private val context: Context) {
                 "Enforcing Max Current Ceiling: $clampedMa mA (~${approxWatts}W • $targetUa µA)..."
             }
         } else {
-            "Active Preset: ${cur.speedMode.label} (${cur.speedMode.maxCurrentMa} mA / ${cur.speedMode.maxWattage}W Max)"
+            "ROM Default Charging Speed & Thermal Active"
         }
 
         val updatedControls = cur.copy(
@@ -4540,7 +4546,11 @@ class KernelRepository private constructor(private val context: Context) {
             effectiveEnforcedCurrentMa = effectiveMa,
             romDefaultOverridden = enabled,
             activeOverrideStatus = statusMsg,
-            lastRootOverrideCommand = "/sys/class/power_supply/{battery,usb,main}/constant_charge_current_max ($targetUa µA)"
+            lastRootOverrideCommand = if (enabled) {
+                "/sys/class/power_supply/{battery,usb,main}/constant_charge_current_max ($targetUa µA)"
+            } else {
+                "Unlocked charging & thermal sysfs nodes for ROM default speed"
+            }
         )
         _chargingControlsFlow.value = updatedControls
         saveChargingControlsPrefs(updatedControls)
@@ -4553,17 +4563,13 @@ class KernelRepository private constructor(private val context: Context) {
             _isRootGrantedFlow.value = granted || RootHelper.isRootAvailable
             val latest = _chargingControlsFlow.value
             val liveTemp = _batteryFlow.value.temperatureC
-            val latestTargetMa = if (latest.manualCurrentLimiterEnabled) {
-                latest.manualCurrentLimitMa
-            } else {
-                latest.speedMode.maxCurrentMa
-            }.coerceIn(1000, 20000)
+            val latestTargetMa = latest.manualCurrentLimitMa.coerceIn(1000, 20000)
 
             val res = RootHelper.enforceRootChargingCurrentLimit(
                 packageName = context.packageName,
-                enabled = true,
+                enabled = latest.manualCurrentLimiterEnabled,
                 currentMa = latestTargetMa,
-                fallbackSpeedModeMa = max(latest.speedMode.maxCurrentMa, latestTargetMa),
+                fallbackSpeedModeMa = latestTargetMa,
                 lockReadOnly = latest.lockSysfsNodesReadOnly,
                 overrideThermalDaemon = latest.overrideRomThermalDaemon || latest.bypassThermalLimit,
                 forcePmicVoter = latest.forcePmicVoterOverride,
@@ -4594,7 +4600,7 @@ class KernelRepository private constructor(private val context: Context) {
                     "Max Limit Set: $currentCeilingMa mA (${(currentCeilingMa * 4.5f / 1000f).roundToInt()}W Max)"
                 }
             } else {
-                "Active Preset: ${afterRoot.speedMode.label} (${afterRoot.speedMode.maxCurrentMa} mA / ${afterRoot.speedMode.maxWattage}W)"
+                "ROM Default Charging Speed & Thermal Active"
             }
             val finalControls = afterRoot.copy(
                 romDefaultOverridden = afterRoot.manualCurrentLimiterEnabled && (granted || RootHelper.isRootAvailable),
@@ -4612,7 +4618,7 @@ class KernelRepository private constructor(private val context: Context) {
                     "Custom Current Limiter Enforced up to $currentCeilingMa mA (~${(currentCeilingMa * 4.5f / 1000f).roundToInt()}W)"
                 }
             } else {
-                "Custom Current Limiter Disabled • Active Preset: ${afterRoot.speedMode.label} (${afterRoot.speedMode.maxCurrentMa} mA)"
+                "Custom Current Limiter Disabled • ROM Default Charging Speed & Thermal Restored"
             }
         }
     }
@@ -4680,7 +4686,7 @@ class KernelRepository private constructor(private val context: Context) {
         if (cur.manualCurrentLimiterEnabled) {
             setManualCurrentLimiter(true, cur.manualCurrentLimitMa)
         } else {
-            setChargingSpeedMode(cur.speedMode)
+            _lastActionFeedbackFlow.value = "Hardware enforcement flags updated"
         }
     }
 
@@ -6864,12 +6870,15 @@ class KernelRepository private constructor(private val context: Context) {
             domain = descriptor,
             action = action
         )
+        val isXposedHook = action.startsWith("LSPOSED_")
         val updatedEvents = (listOf(newEv) + curTelem.recentBlockedEvents).take(25)
         _adBlockerTelemetryFlow.value = curTelem.copy(
             totalBlockedQueries = curTelem.totalBlockedQueries + 1L,
             blockedTodayQueries = curTelem.blockedTodayQueries + 1L,
             inAppAdsSkippedCount = curTelem.inAppAdsSkippedCount + 1,
+            xposedAdsHookedCount = curTelem.xposedAdsHookedCount + (if (isXposedHook) 1 else 0),
             isInAppAdShieldActive = true,
+            isLsposedModuleActive = curTelem.isLsposedModuleActive || isXposedHook,
             recentBlockedEvents = updatedEvents
         )
     }
@@ -6936,7 +6945,7 @@ class KernelRepository private constructor(private val context: Context) {
             val status = AdBlockerEngine.applyAdBlocking(context, _adBlockerConfigFlow.value, forceReapply = true)
             syncAdBlockerVerificationStatus(status)
             _lastActionFeedbackFlow.value = if (granted) {
-                "LSPosed Module Permissions, SELinux Rules & World-Readable Configs Granted"
+                "LSPosed Scope DB, SELinux Rules & 5-Layer Xposed Hooks Synchronized"
             } else {
                 "LSPosed ContentProvider Active (Grant Root for SELinux & XSharedPreferences sync)"
             }
@@ -6969,12 +6978,24 @@ class KernelRepository private constructor(private val context: Context) {
         }
     }
 
+    private fun countActiveXposedLayers(cfg: AdBlockerConfig): Int {
+        var count = 0
+        if (cfg.xposedHookLithoAndViews) count++
+        if (cfg.xposedHookYoutubeAndVideoAds) count++
+        if (cfg.xposedHookMobileAdSdks) count++
+        if (cfg.xposedHookNetworkAndWebView) count++
+        if (cfg.xposedHookJsonAndGraphQl) count++
+        return count
+    }
+
     private suspend fun syncAdBlockerVerificationStatus(status: com.example.data.adblock.AdBlockerVerificationStatus) {
         val lspInfo = com.example.xposed.DragonLSPosedStatus.inspectLSPosedEnvironment(context)
         val cur = _adBlockerTelemetryFlow.value
+        val cfg = _adBlockerConfigFlow.value
         val accActive = _isAccessibilityEnabledFlow.value || checkAccessibilityStatus()
         val isLspActive = lspInfo.isModuleHookedInApp || lspInfo.isModuleEnabledInLSPosed
-        val summaryPrefix = if (isLspActive) "LSPosed Hook Active + " else ""
+        val activeLayers = countActiveXposedLayers(cfg)
+        val summaryPrefix = if (isLspActive) "Xposed (${activeLayers}/5 Hooks) + " else ""
         _adBlockerTelemetryFlow.value = cur.copy(
             activeDnsSpecifier = status.activeDnsHost,
             activeHostsEntriesCount = status.activeHostsCount,
@@ -6982,7 +7003,8 @@ class KernelRepository private constructor(private val context: Context) {
             isPrivateDnsVerified = status.isPrivateDnsVerified,
             isNetfilterVerified = status.isNetfilterVerified,
             isQuicBlocked = status.isQuicBlocked,
-            isInAppAdShieldActive = isLspActive || (accActive && (_adBlockerConfigFlow.value.autoSkipInAppSocialAds || _adBlockerConfigFlow.value.autoSwipeSponsoredReels)),
+            activeXposedHookLayers = activeLayers,
+            isInAppAdShieldActive = isLspActive || (accActive && (cfg.autoSkipInAppSocialAds || cfg.autoSwipeSponsoredReels)),
             isLsposedFrameworkDetected = lspInfo.isFrameworkInstalled,
             isLsposedModuleActive = isLspActive,
             lsposedVariant = lspInfo.frameworkVariant,
@@ -7008,6 +7030,11 @@ class KernelRepository private constructor(private val context: Context) {
             val blockIpv6 = prefs.getBoolean("adblock_block_ipv6", true)
             val autoSkipInApp = prefs.getBoolean("adblock_auto_skip_inapp", true)
             val autoSwipeReels = prefs.getBoolean("adblock_auto_swipe_reels", true)
+            val xposedLitho = prefs.getBoolean("adblock_xposed_litho", true)
+            val xposedYtVideo = prefs.getBoolean("adblock_xposed_yt_video", true)
+            val xposedAdSdks = prefs.getBoolean("adblock_xposed_ad_sdks", true)
+            val xposedNetWebView = prefs.getBoolean("adblock_xposed_net_webview", true)
+            val xposedJsonGraphQl = prefs.getBoolean("adblock_xposed_json_graphql", true)
 
             val toggles = mutableMapOf<String, Boolean>()
             SocialPlatform.values().forEach { platform ->
@@ -7031,6 +7058,11 @@ class KernelRepository private constructor(private val context: Context) {
                 blockIpv6AdLeakage = blockIpv6,
                 autoSkipInAppSocialAds = autoSkipInApp,
                 autoSwipeSponsoredReels = autoSwipeReels,
+                xposedHookLithoAndViews = xposedLitho,
+                xposedHookYoutubeAndVideoAds = xposedYtVideo,
+                xposedHookMobileAdSdks = xposedAdSdks,
+                xposedHookNetworkAndWebView = xposedNetWebView,
+                xposedHookJsonAndGraphQl = xposedJsonGraphQl,
                 platformToggles = toggles,
                 customBlacklistDomains = blacklist,
                 customWhitelistDomains = whitelist
@@ -7057,6 +7089,11 @@ class KernelRepository private constructor(private val context: Context) {
                 .putBoolean("adblock_block_ipv6", config.blockIpv6AdLeakage)
                 .putBoolean("adblock_auto_skip_inapp", config.autoSkipInAppSocialAds)
                 .putBoolean("adblock_auto_swipe_reels", config.autoSwipeSponsoredReels)
+                .putBoolean("adblock_xposed_litho", config.xposedHookLithoAndViews)
+                .putBoolean("adblock_xposed_yt_video", config.xposedHookYoutubeAndVideoAds)
+                .putBoolean("adblock_xposed_ad_sdks", config.xposedHookMobileAdSdks)
+                .putBoolean("adblock_xposed_net_webview", config.xposedHookNetworkAndWebView)
+                .putBoolean("adblock_xposed_json_graphql", config.xposedHookJsonAndGraphQl)
 
             config.platformToggles.forEach { (id, enabled) ->
                 editor.putBoolean("adblock_platform_$id", enabled)
@@ -7223,7 +7260,7 @@ class KernelRepository private constructor(private val context: Context) {
         saveAdBlockerPrefs(updated)
         val accActive = _isAccessibilityEnabledFlow.value || checkAccessibilityStatus()
         _adBlockerTelemetryFlow.value = _adBlockerTelemetryFlow.value.copy(
-            isInAppAdShieldActive = accActive && (enabled || updated.autoSwipeSponsoredReels)
+            isInAppAdShieldActive = _adBlockerTelemetryFlow.value.isLsposedModuleActive || (accActive && (enabled || updated.autoSwipeSponsoredReels))
         )
         _lastActionFeedbackFlow.value = "In-App Video Ad Auto-Skipper: ${if (enabled) "ENABLED" else "DISABLED"}"
     }
@@ -7235,9 +7272,64 @@ class KernelRepository private constructor(private val context: Context) {
         saveAdBlockerPrefs(updated)
         val accActive = _isAccessibilityEnabledFlow.value || checkAccessibilityStatus()
         _adBlockerTelemetryFlow.value = _adBlockerTelemetryFlow.value.copy(
-            isInAppAdShieldActive = accActive && (updated.autoSkipInAppSocialAds || enabled)
+            isInAppAdShieldActive = _adBlockerTelemetryFlow.value.isLsposedModuleActive || (accActive && (updated.autoSkipInAppSocialAds || enabled))
         )
-        _lastActionFeedbackFlow.value = "Sponsored Reels & TikTok Auto-Bypass: ${if (enabled) "ENABLED" else "DISABLED"}"
+        _lastActionFeedbackFlow.value = "Sponsored Feed & Reels In-Place Hider: ${if (enabled) "ENABLED" else "DISABLED"}"
+    }
+
+    fun setXposedHookLithoAndViews(enabled: Boolean) {
+        val cur = _adBlockerConfigFlow.value
+        val updated = cur.copy(xposedHookLithoAndViews = enabled)
+        _adBlockerConfigFlow.value = updated
+        saveAdBlockerPrefs(updated)
+        _adBlockerTelemetryFlow.value = _adBlockerTelemetryFlow.value.copy(
+            activeXposedHookLayers = countActiveXposedLayers(updated)
+        )
+        _lastActionFeedbackFlow.value = "Xposed Litho & 0px Sponsored View Hook: ${if (enabled) "ENABLED" else "DISABLED"}"
+    }
+
+    fun setXposedHookYoutubeAndVideoAds(enabled: Boolean) {
+        val cur = _adBlockerConfigFlow.value
+        val updated = cur.copy(xposedHookYoutubeAndVideoAds = enabled)
+        _adBlockerConfigFlow.value = updated
+        saveAdBlockerPrefs(updated)
+        _adBlockerTelemetryFlow.value = _adBlockerTelemetryFlow.value.copy(
+            activeXposedHookLayers = countActiveXposedLayers(updated)
+        )
+        _lastActionFeedbackFlow.value = "Xposed YouTube Player & Video Ad Hook: ${if (enabled) "ENABLED" else "DISABLED"}"
+    }
+
+    fun setXposedHookMobileAdSdks(enabled: Boolean) {
+        val cur = _adBlockerConfigFlow.value
+        val updated = cur.copy(xposedHookMobileAdSdks = enabled)
+        _adBlockerConfigFlow.value = updated
+        saveAdBlockerPrefs(updated)
+        _adBlockerTelemetryFlow.value = _adBlockerTelemetryFlow.value.copy(
+            activeXposedHookLayers = countActiveXposedLayers(updated)
+        )
+        _lastActionFeedbackFlow.value = "Xposed AdMob / Meta / Unity / AppLovin SDK Nullifier: ${if (enabled) "ENABLED" else "DISABLED"}"
+    }
+
+    fun setXposedHookNetworkAndWebView(enabled: Boolean) {
+        val cur = _adBlockerConfigFlow.value
+        val updated = cur.copy(xposedHookNetworkAndWebView = enabled)
+        _adBlockerConfigFlow.value = updated
+        saveAdBlockerPrefs(updated)
+        _adBlockerTelemetryFlow.value = _adBlockerTelemetryFlow.value.copy(
+            activeXposedHookLayers = countActiveXposedLayers(updated)
+        )
+        _lastActionFeedbackFlow.value = "Xposed Cronet / OkHttp / DNS / WebView Hook: ${if (enabled) "ENABLED" else "DISABLED"}"
+    }
+
+    fun setXposedHookJsonAndGraphQl(enabled: Boolean) {
+        val cur = _adBlockerConfigFlow.value
+        val updated = cur.copy(xposedHookJsonAndGraphQl = enabled)
+        _adBlockerConfigFlow.value = updated
+        saveAdBlockerPrefs(updated)
+        _adBlockerTelemetryFlow.value = _adBlockerTelemetryFlow.value.copy(
+            activeXposedHookLayers = countActiveXposedLayers(updated)
+        )
+        _lastActionFeedbackFlow.value = "Xposed JSON / GraphQL Ad Payload Stripper: ${if (enabled) "ENABLED" else "DISABLED"}"
     }
 
     fun purgePreloadedSocialAdCaches(platformName: String? = null) {

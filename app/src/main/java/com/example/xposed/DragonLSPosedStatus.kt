@@ -117,7 +117,7 @@ object DragonLSPosedStatus {
             xposedApiVersion = if (hookedApi > 0) hookedApi else if (frameworkDetected) 93 else 0,
             frameworkVariant = variant,
             arePermissionsGranted = permsGranted,
-            configuredScopeCount = 18
+            configuredScopeCount = 22
         )
     }
 
@@ -126,6 +126,7 @@ object DragonLSPosedStatus {
      * 1. Grants runtime & system permissions (QUERY_ALL_PACKAGES, INTERACT_ACROSS_USERS, WRITE_SECURE_SETTINGS).
      * 2. Sets world-readable permissions (0755/0644) on app data & shared_prefs so XSharedPreferences in hooked apps can read configs.
      * 3. Patches SELinux rules so hooked social media apps can query DragonLSPosedConfigProvider without binder denials.
+     * 4. Auto-enables module & social app scopes inside /data/adb/lspd/config/modules_config.db when sqlite3 is available.
      */
     suspend fun grantLSPosedModulePermissions(context: Context): Boolean = withContext(Dispatchers.IO) {
         val pkg = context.packageName
