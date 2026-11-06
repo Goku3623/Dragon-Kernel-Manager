@@ -672,7 +672,7 @@ class KernelRepository private constructor(private val context: Context) {
                 activeOverrideStatus = if (manualLimiterEnabled) {
                     "Custom Current Limiter Active: $limitMa mA Max Ceiling"
                 } else {
-                    "ROM Default Charging Speed & Thermal Active"
+                    "Active Preset: ${speedMode.label} (${speedMode.maxCurrentMa} mA / ${speedMode.maxWattage}W Max)"
                 },
                 nightCharging = loadedNight,
                 bypassThermalLimit = prefs.getBoolean("bypass_thermal_limit", false),
@@ -1909,7 +1909,9 @@ class KernelRepository private constructor(private val context: Context) {
                 (isNightTargetReached && night.autoBypassAtTarget) ||
                 isNightThermalPaused
         val needThermalBypass = charging.bypassThermalLimit
-        val shouldEnforceCurrentCeiling = charging.manualCurrentLimiterEnabled ||
+        val shouldEnforceCurrentCeiling = forceImmediate ||
+                bat.isCharging ||
+                charging.manualCurrentLimiterEnabled ||
                 isNightWindowOpen ||
                 lastEnforcedNightActiveState == true
 
@@ -1967,7 +1969,7 @@ class KernelRepository private constructor(private val context: Context) {
                 )
             }
 
-            if (isNightWindowOpen || charging.manualCurrentLimiterEnabled) {
+            if (isNightWindowOpen || charging.manualCurrentLimiterEnabled || needThermalBypass || shouldEnforceCurrentCeiling) {
                 val nightTargetMa = if (isTopUpPhase) {
                     min(1800, night.trickleCurrentMa + 400)
                 } else {
@@ -1975,7 +1977,8 @@ class KernelRepository private constructor(private val context: Context) {
                 }
                 val targetMa = when {
                     isNightWindowOpen -> nightTargetMa
-                    else -> charging.manualCurrentLimitMa
+                    charging.manualCurrentLimiterEnabled -> charging.manualCurrentLimitMa
+                    else -> charging.speedMode.maxCurrentMa
                 }.coerceIn(500, 20000)
 
                 val nightTempLimitEnabled = isNightWindowOpen || (charging.manualCurrentLimiterEnabled && charging.customTempLimitEnabled)
@@ -1986,9 +1989,9 @@ class KernelRepository private constructor(private val context: Context) {
                     packageName = context.packageName,
                     enabled = true,
                     currentMa = targetMa,
-                    fallbackSpeedModeMa = targetMa,
+                    fallbackSpeedModeMa = if (isNightWindowOpen) targetMa else max(charging.speedMode.maxCurrentMa, targetMa),
                     lockReadOnly = charging.lockSysfsNodesReadOnly,
-                    overrideThermalDaemon = charging.overrideRomThermalDaemon || charging.bypassThermalLimit,
+                    overrideThermalDaemon = true,
                     forcePmicVoter = charging.forcePmicVoterOverride || isNightWindowOpen,
                     customTempLimitEnabled = nightTempLimitEnabled,
                     customTempLimitC = effectiveTempLimitC,
@@ -1999,7 +2002,7 @@ class KernelRepository private constructor(private val context: Context) {
                     isTempThrottlingTriggered = isNightThermalPaused || charging.isCustomTempThrottlingActive,
                     externalBypassActive = false
                 )
-            } else if (wasNightActive && !charging.bypassThermalLimit) {
+            } else if (wasNightActive) {
                 // Night charging window just ended and Custom Current Limiter is OFF: restore ROM default speed & thermal
                 RootHelper.enforceRootChargingCurrentLimit(
                     packageName = context.packageName,
@@ -3979,12 +3982,12 @@ class KernelRepository private constructor(private val context: Context) {
             val granted = RootHelper.grantAllNecessaryPermissions(context.packageName, getPeakSupportedRefreshRate())
             _isRootGrantedFlow.value = granted || RootHelper.isRootAvailable
             val cur = _chargingControlsFlow.value
-            val targetMa = if (cur.manualCurrentLimiterEnabled) cur.manualCurrentLimitMa else 20000
+            val targetMa = if (cur.manualCurrentLimiterEnabled) cur.manualCurrentLimitMa else cur.speedMode.maxCurrentMa
             RootHelper.enforceRootChargingCurrentLimit(
                 packageName = context.packageName,
-                enabled = cur.manualCurrentLimiterEnabled,
+                enabled = true,
                 currentMa = targetMa,
-                fallbackSpeedModeMa = targetMa,
+                fallbackSpeedModeMa = max(cur.speedMode.maxCurrentMa, targetMa),
                 lockReadOnly = cur.lockSysfsNodesReadOnly,
                 overrideThermalDaemon = cur.overrideRomThermalDaemon || cur.bypassThermalLimit,
                 forcePmicVoter = cur.forcePmicVoterOverride,
@@ -4535,7 +4538,7 @@ class KernelRepository private constructor(private val context: Context) {
                 "Enforcing Max Current Ceiling: $clampedMa mA (~${approxWatts}W • $targetUa µA)..."
             }
         } else {
-            "ROM Default Charging Speed & Thermal Active"
+            "Active Preset: ${cur.speedMode.label} (${cur.speedMode.maxCurrentMa} mA / ${cur.speedMode.maxWattage}W Max)"
         }
 
         val updatedControls = cur.copy(
@@ -4544,13 +4547,9 @@ class KernelRepository private constructor(private val context: Context) {
             manualCurrentLimitMa = clampedMa,
             isCustomTempThrottlingActive = isTempTriggered,
             effectiveEnforcedCurrentMa = effectiveMa,
-            romDefaultOverridden = enabled,
+            romDefaultOverridden = true,
             activeOverrideStatus = statusMsg,
-            lastRootOverrideCommand = if (enabled) {
-                "/sys/class/power_supply/{battery,usb,main}/constant_charge_current_max ($targetUa µA)"
-            } else {
-                "Unlocked charging & thermal sysfs nodes for ROM default speed"
-            }
+            lastRootOverrideCommand = "/sys/class/power_supply/{battery,usb,main}/constant_charge_current_max ($targetUa µA)"
         )
         _chargingControlsFlow.value = updatedControls
         saveChargingControlsPrefs(updatedControls)
@@ -4563,13 +4562,17 @@ class KernelRepository private constructor(private val context: Context) {
             _isRootGrantedFlow.value = granted || RootHelper.isRootAvailable
             val latest = _chargingControlsFlow.value
             val liveTemp = _batteryFlow.value.temperatureC
-            val latestTargetMa = latest.manualCurrentLimitMa.coerceIn(1000, 20000)
+            val latestTargetMa = if (latest.manualCurrentLimiterEnabled) {
+                latest.manualCurrentLimitMa
+            } else {
+                latest.speedMode.maxCurrentMa
+            }.coerceIn(1000, 20000)
 
             val res = RootHelper.enforceRootChargingCurrentLimit(
                 packageName = context.packageName,
-                enabled = latest.manualCurrentLimiterEnabled,
+                enabled = true,
                 currentMa = latestTargetMa,
-                fallbackSpeedModeMa = latestTargetMa,
+                fallbackSpeedModeMa = max(latest.speedMode.maxCurrentMa, latestTargetMa),
                 lockReadOnly = latest.lockSysfsNodesReadOnly,
                 overrideThermalDaemon = latest.overrideRomThermalDaemon || latest.bypassThermalLimit,
                 forcePmicVoter = latest.forcePmicVoterOverride,
@@ -4600,10 +4603,10 @@ class KernelRepository private constructor(private val context: Context) {
                     "Max Limit Set: $currentCeilingMa mA (${(currentCeilingMa * 4.5f / 1000f).roundToInt()}W Max)"
                 }
             } else {
-                "ROM Default Charging Speed & Thermal Active"
+                "Active Preset: ${afterRoot.speedMode.label} (${afterRoot.speedMode.maxCurrentMa} mA / ${afterRoot.speedMode.maxWattage}W)"
             }
             val finalControls = afterRoot.copy(
-                romDefaultOverridden = afterRoot.manualCurrentLimiterEnabled && (granted || RootHelper.isRootAvailable),
+                romDefaultOverridden = granted || RootHelper.isRootAvailable,
                 activeOverrideStatus = finalStatus,
                 lastRootOverrideCommand = appliedInfo
             )
@@ -4618,7 +4621,7 @@ class KernelRepository private constructor(private val context: Context) {
                     "Custom Current Limiter Enforced up to $currentCeilingMa mA (~${(currentCeilingMa * 4.5f / 1000f).roundToInt()}W)"
                 }
             } else {
-                "Custom Current Limiter Disabled • ROM Default Charging Speed & Thermal Restored"
+                "Custom Current Limiter Disabled • Active Preset: ${afterRoot.speedMode.label} (${afterRoot.speedMode.maxCurrentMa} mA)"
             }
         }
     }
@@ -4641,7 +4644,11 @@ class KernelRepository private constructor(private val context: Context) {
                         (cur.isCustomTempThrottlingActive && batTemp > resumeTempC)
                 )
 
+        val shouldAutoEnableLimiter = tempLimitEnabled && !cur.manualCurrentLimiterEnabled
+        val newLimiterEnabled = cur.manualCurrentLimiterEnabled || shouldAutoEnableLimiter
+
         val updated = cur.copy(
+            manualCurrentLimiterEnabled = newLimiterEnabled,
             customTempLimitEnabled = tempLimitEnabled,
             customTempLimitC = clampedTempC,
             customTempThermalMode = thermalMode,
@@ -4653,20 +4660,11 @@ class KernelRepository private constructor(private val context: Context) {
         saveChargingControlsPrefs(updated)
         tickTelemetry()
 
-        if (cur.manualCurrentLimiterEnabled) {
+        if (newLimiterEnabled) {
             setManualCurrentLimiter(true, cur.manualCurrentLimitMa)
         } else {
-            _lastActionFeedbackFlow.value = if (tempLimitEnabled) {
-                String.format(
-                    java.util.Locale.US,
-                    "Custom Limiter Temp Guard set to %.1f°C (%s • Fallback: %d mA)",
-                    clampedTempC,
-                    thermalMode.shortTitle,
-                    clampedFallbackMa
-                )
-            } else {
-                "Custom Limiter Temperature Guard Disabled • Full selected max limit active"
-            }
+            enforceActiveChargingRulesAsync(forceImmediate = true)
+            _lastActionFeedbackFlow.value = "Custom Limiter Temperature Guard Disabled • Full selected max limit active"
         }
     }
 
@@ -4686,7 +4684,7 @@ class KernelRepository private constructor(private val context: Context) {
         if (cur.manualCurrentLimiterEnabled) {
             setManualCurrentLimiter(true, cur.manualCurrentLimitMa)
         } else {
-            _lastActionFeedbackFlow.value = "Hardware enforcement flags updated"
+            setChargingSpeedMode(cur.speedMode)
         }
     }
 

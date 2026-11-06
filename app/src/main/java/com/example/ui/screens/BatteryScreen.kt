@@ -726,68 +726,113 @@ fun BatteryScreen(repository: KernelRepository) {
                     border = CardDefaults.outlinedCardBorder()
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
-                        val isAnyCustomOverrideActive = chargingControls.bypassCharging ||
-                            chargingControls.manualCurrentLimiterEnabled ||
-                            chargingControls.nightCharging.isCurrentlyActive ||
-                            chargingControls.bypassThermalLimit
-
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                                Icon(
-                                    imageVector = Icons.Default.FlashOn,
-                                    contentDescription = "Charging Mode",
-                                    tint = if (isAnyCustomOverrideActive) WarningOrange else SuccessGreen
-                                )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.FlashOn, contentDescription = "Charging Controls", tint = SuccessGreen)
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Column {
-                                    Text("Charging & Thermal Engine", fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                                    Text(
-                                        text = when {
-                                            chargingControls.bypassCharging -> "Motherboard Bypass Charging Active (0 mA Cell Stress)"
-                                            chargingControls.nightCharging.isCurrentlyActive -> "Night Charging Active (${chargingControls.nightCharging.trickleCurrentMa} mA • ${chargingControls.nightCharging.targetLimitPercent}% Cap)"
-                                            chargingControls.manualCurrentLimiterEnabled -> "Custom Current Limiter Active (${chargingControls.manualCurrentLimitMa} mA Max)"
-                                            chargingControls.bypassThermalLimit -> "Bypass Thermal Step-Down Active (ROM Speed Uncapped)"
-                                            else -> "ROM Default Charging Speed & Thermal Active"
-                                        },
-                                        fontSize = 10.5.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = if (isAnyCustomOverrideActive) WarningOrange else SuccessGreen
-                                    )
-                                }
+                                Text("Charging Speed Presets", fontWeight = FontWeight.Bold, fontSize = 15.sp)
                             }
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
-                                color = (if (isAnyCustomOverrideActive) WarningOrange else SuccessGreen).copy(alpha = 0.14f)
+                                color = SuccessGreen.copy(alpha = 0.14f)
                             ) {
                                 Text(
-                                    text = when {
-                                        chargingControls.bypassCharging -> "BYPASS"
-                                        chargingControls.nightCharging.isCurrentlyActive -> "NIGHT ${chargingControls.nightCharging.trickleCurrentMa} mA"
-                                        chargingControls.manualCurrentLimiterEnabled -> "LIMIT ${chargingControls.manualCurrentLimitMa} mA"
-                                        chargingControls.bypassThermalLimit -> "THERMAL BYPASS"
-                                        else -> "ROM DEFAULT"
-                                    },
+                                    text = if (chargingControls.manualCurrentLimiterEnabled)
+                                        "CUSTOM ${chargingControls.manualCurrentLimitMa} mA"
+                                    else
+                                        "${chargingControls.speedMode.shortLabel} • ${chargingControls.speedMode.maxCurrentMa} mA",
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.ExtraBold,
                                     fontFamily = FontFamily.Monospace,
-                                    color = if (isAnyCustomOverrideActive) WarningOrange else SuccessGreen,
+                                    color = SuccessGreen,
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                 )
                             }
                         }
 
                         Text(
-                            text = "Device charges at the ROM's native default speed and thermal curve unless Custom Current Limiter, Thermal Control, Night Charging, Bypass Charging, or Bypass Thermal Limit is enabled below.",
+                            text = "Select max allowable wattage & current ceiling for Xiaomi 90W HyperCharge, 67W Turbo, 33W Fast, or 18W Standard PD charging. Selecting a preset immediately applies its hardware FCC/ICL ceiling.",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(vertical = 4.dp)
                         )
 
                         Spacer(modifier = Modifier.height(10.dp))
+
+                        val modes = ChargingSpeedMode.entries
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            modes.chunked(2).forEach { rowModes ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    rowModes.forEach { mode ->
+                                        val isSelected = chargingControls.speedMode == mode &&
+                                            (!chargingControls.manualCurrentLimiterEnabled || chargingControls.manualCurrentLimitMa == mode.maxCurrentMa)
+                                        Card(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .clickable { repository.setChargingSpeedMode(mode) }
+                                                .border(
+                                                    width = if (isSelected) 1.5.dp else 1.dp,
+                                                    color = if (isSelected) SuccessGreen else MaterialTheme.colorScheme.outline.copy(alpha = 0.25f),
+                                                    shape = RoundedCornerShape(12.dp)
+                                                ),
+                                            shape = RoundedCornerShape(12.dp),
+                                            colors = CardDefaults.cardColors(
+                                                containerColor = if (isSelected)
+                                                    SuccessGreen.copy(alpha = 0.12f)
+                                                else
+                                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                                            )
+                                        ) {
+                                            Column(modifier = Modifier.padding(10.dp)) {
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Text(
+                                                        text = mode.label,
+                                                        fontSize = 11.5.sp,
+                                                        fontWeight = FontWeight.ExtraBold,
+                                                        color = if (isSelected) SuccessGreen else MaterialTheme.colorScheme.onSurface
+                                                    )
+                                                    if (isSelected) {
+                                                        Icon(
+                                                            imageVector = Icons.Default.CheckCircle,
+                                                            contentDescription = "Active Preset",
+                                                            tint = SuccessGreen,
+                                                            modifier = Modifier.size(14.dp)
+                                                        )
+                                                    }
+                                                }
+                                                Spacer(modifier = Modifier.height(3.dp))
+                                                Text(
+                                                    text = "Max Ceiling: ${mode.maxCurrentMa} mA",
+                                                    fontSize = 10.5.sp,
+                                                    fontFamily = FontFamily.Monospace,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = MaterialTheme.colorScheme.primary
+                                                )
+                                                Text(
+                                                    text = mode.description,
+                                                    fontSize = 9.5.sp,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
                         HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
                         Spacer(modifier = Modifier.height(12.dp))
 

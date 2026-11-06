@@ -361,7 +361,17 @@ object RootHelper {
             # 0. Ensure Android BatteryService is NEVER stuck in mock override mode
             cmd battery reset 2>/dev/null || dumpsys battery reset 2>/dev/null || true
 
-            # 1. Start with USB VBUS input active (input_suspend=0) so VSYS powers the motherboard directly
+            # Stop ROM thermal daemons (mi_thermald, thermal-engine) so OEM services cannot overwrite bypass charging
+            stop mi_thermald 2>/dev/null || true
+            stop thermal-engine 2>/dev/null || true
+            stop thermalloadalgod 2>/dev/null || true
+            setprop ctl.stop mi_thermald 2>/dev/null || true
+            setprop ctl.stop thermal-engine 2>/dev/null || true
+            setprop ctl.stop vendor.thermal-engine 2>/dev/null || true
+            setprop ctl.stop thermalloadalgod 2>/dev/null || true
+
+            # 1. Ensure USB VBUS input (ICL) stays open and NEVER suspended (input_suspend=0)
+            # This is critical so the motherboard / VSYS receives wall power while battery charging is cut off.
             for in_node in \
                 /sys/class/power_supply/battery/input_suspend \
                 /sys/class/power_supply/usb/input_suspend \
@@ -379,13 +389,15 @@ object RootHelper {
                     chattr -i "${'$'}in_node" 2>/dev/null || true
                     chmod 0666 "${'$'}in_node" 2>/dev/null || true
                     echo 0 > "${'$'}in_node" 2>/dev/null || true
+                    chmod 0444 "${'$'}in_node" 2>/dev/null || true
                 fi
             done
             if [ -e /sys/kernel/debug/pmic-votable/USBIN_SUSPEND/force_active ]; then
+                echo 0 > /sys/kernel/debug/pmic-votable/USBIN_SUSPEND/force_val 2>/dev/null || true
                 echo 0 > /sys/kernel/debug/pmic-votable/USBIN_SUSPEND/force_active 2>/dev/null || true
             fi
 
-            # 2. Disable battery & charge-pump charging switches (0 = charging disabled, VSYS stays active)
+            # 2. Disable battery & charge-pump charging switches (0 = charging disabled, motherboard VSYS stays active)
             for chg_node in \
                 /sys/class/power_supply/battery/charging_enabled \
                 /sys/class/power_supply/battery/battery_charging_enabled \
@@ -402,7 +414,10 @@ object RootHelper {
                 /sys/devices/platform/soc/soc:qcom,pmic_glink/soc:qcom,pmic_glink:qcom,ucsi/power_supply/battery/charging_enabled \
                 /sys/devices/platform/mtk-charger/power_supply/battery/charging_enabled \
                 /sys/devices/platform/charger/charging_enabled \
-                /sys/class/power_supply/battery/device/enable_charging; do
+                /sys/class/power_supply/battery/device/enable_charging \
+                /sys/class/power_supply/battery/charger_control \
+                /sys/class/power_supply/battery/charge_control_limit_max \
+                /sys/class/power_supply/battery/smart_chg; do
                 if [ -e "${'$'}chg_node" ]; then
                     chattr -i "${'$'}chg_node" 2>/dev/null || true
                     chmod 0666 "${'$'}chg_node" 2>/dev/null || true
@@ -411,7 +426,7 @@ object RootHelper {
                 fi
             done
 
-            # 3. Enable dedicated Bypass / Night-Hold / Charge-Disable nodes (1 = pause/bypass battery cell charging)
+            # 3. Enable dedicated Hardware Bypass / Night-Hold / Charge-Disable nodes across all OEM kernels (1 = direct motherboard power)
             for dis_node in \
                 /sys/class/qcom-battery/night_charging \
                 /sys/class/power_supply/battery/night_charging \
@@ -426,7 +441,13 @@ object RootHelper {
                 /sys/class/qcom-battery/restrict_chg \
                 /sys/class/power_supply/battery/charging_call_state \
                 /sys/class/power_supply/battery/device/charging_suspend \
-                /sys/devices/platform/soc/soc:qcom,pmic_glink/soc:qcom,pmic_glink:qcom,ucsi/power_supply/battery/charge_disable; do
+                /sys/class/power_supply/battery/device/smart_charging_interruption \
+                /sys/class/power_supply/battery/mmi_charging_bypass \
+                /sys/class/power_supply/battery/charging_bypass \
+                /sys/class/power_supply/battery/asus_bypass \
+                /sys/class/power_supply/battery/game_mode_charge_disable \
+                /sys/devices/platform/soc/soc:qcom,pmic_glink/soc:qcom,pmic_glink:qcom,ucsi/power_supply/battery/charge_disable \
+                /sys/class/power_supply/battery/device/smart_charge_disable; do
                 if [ -e "${'$'}dis_node" ]; then
                     chattr -i "${'$'}dis_node" 2>/dev/null || true
                     chmod 0666 "${'$'}dis_node" 2>/dev/null || true
@@ -468,13 +489,14 @@ object RootHelper {
                 echo 1 > /sys/kernel/debug/pmic-votable/CHG_DISABLE/force_active 2>/dev/null && applied_nodes="${'$'}applied_nodes votable:CHG_DISABLE=1"
             fi
 
-            # 6. Hardware Constant Charge Current Clamp (0 uA into battery cells, while USB input limit stays 3A for VSYS)
+            # 6. Hardware Constant Charge Current Clamp (0 uA into battery cells, while USB input limit stays high for VSYS)
             for cur_node in \
                 /sys/class/power_supply/battery/constant_charge_current_max \
                 /sys/class/power_supply/battery/constant_charge_current \
                 /sys/class/power_supply/main/constant_charge_current_max \
                 /sys/class/power_supply/bbc/constant_charge_current_max \
                 /sys/class/power_supply/cp_master/constant_charge_current_max \
+                /sys/class/power_supply/cp_slave/constant_charge_current_max \
                 /sys/class/qcom-battery/constant_charge_current_max \
                 /sys/class/qcom-battery/restrict_cur; do
                 if [ -e "${'$'}cur_node" ]; then
@@ -498,8 +520,10 @@ object RootHelper {
                 /sys/class/power_supply/usb/current_max \
                 /sys/class/power_supply/usb/input_current_limit; do
                 if [ -e "${'$'}usb_limit" ]; then
+                    chattr -i "${'$'}usb_limit" 2>/dev/null || true
                     chmod 0666 "${'$'}usb_limit" 2>/dev/null || true
                     echo 3000000 > "${'$'}usb_limit" 2>/dev/null || true
+                    chmod 0444 "${'$'}usb_limit" 2>/dev/null || true
                 fi
             done
 
@@ -510,44 +534,8 @@ object RootHelper {
             setprop sys.battery.charging_disabled 1 2>/dev/null || true
             setprop vendor.battery.charge_disable 1 2>/dev/null || true
             setprop persist.vendor.asus.bypass_charging 1 2>/dev/null || true
-
-            # 8. Closed-Loop Hardware Verification:
-            # Wait 150ms and verify if the PMIC actually stopped charging the battery cell.
-            # If the kernel driver ignored charging_enabled=0/night_charging=1/FCC=0 and is still pushing >150mA into the battery,
-            # engage hardware input_suspend=1 so charging is 100% guaranteed to stop!
-            sleep 0.15 2>/dev/null || true
-            b_stat=${'$'}(cat /sys/class/power_supply/battery/status 2>/dev/null | tr -d '\n\r')
-            b_cur=${'$'}(cat /sys/class/power_supply/battery/current_now 2>/dev/null | tr -d ' \n\r')
-            abs_cur=${'$'}{b_cur#-}
-            if [ -z "${'$'}abs_cur" ]; then abs_cur=0; fi
-            if [ "${'$'}abs_cur" -gt 30000 ] 2>/dev/null; then
-                cur_ma=${'$'}((abs_cur / 1000))
-            else
-                cur_ma=${'$'}abs_cur
-            fi
-
-            if [ "${'$'}b_stat" = "Charging" ] && [ "${'$'}cur_ma" -gt 150 ] 2>/dev/null; then
-                for in_node in \
-                    /sys/class/power_supply/battery/input_suspend \
-                    /sys/class/qcom-battery/input_suspend \
-                    /sys/class/power_supply/usb/input_suspend \
-                    /sys/devices/platform/soc/soc:qcom,pmic_glink/soc:qcom,pmic_glink:qcom,ucsi/power_supply/battery/input_suspend \
-                    /sys/kernel/debug/google_charger/input_suspend \
-                    /sys/kernel/debug/google_charger/chg_suspend \
-                    /sys/class/power_supply/mtk-charger/input_suspend \
-                    /sys/class/power_supply/sec-charger/input_suspend; do
-                    if [ -e "${'$'}in_node" ]; then
-                        chattr -i "${'$'}in_node" 2>/dev/null || true
-                        chmod 0666 "${'$'}in_node" 2>/dev/null || true
-                        echo 1 > "${'$'}in_node" 2>/dev/null && applied_nodes="${'$'}applied_nodes ${'$'}(basename "${'$'}in_node")=1"
-                        chmod 0444 "${'$'}in_node" 2>/dev/null || true
-                    fi
-                done
-                if [ -d /sys/kernel/debug/pmic-votable/USBIN_SUSPEND ]; then
-                    echo 1 > /sys/kernel/debug/pmic-votable/USBIN_SUSPEND/force_val 2>/dev/null || true
-                    echo 1 > /sys/kernel/debug/pmic-votable/USBIN_SUSPEND/force_active 2>/dev/null && applied_nodes="${'$'}applied_nodes votable:USBIN_SUSPEND=1"
-                fi
-            fi
+            setprop persist.vendor.battery.game_mode 1 2>/dev/null || true
+            setprop persist.vendor.charging.game_bypass 1 2>/dev/null || true
 
             echo "APPLIED:${'$'}applied_nodes"
             """.trimIndent()
@@ -629,7 +617,13 @@ object RootHelper {
                 /sys/class/qcom-battery/restrict_chg \
                 /sys/class/power_supply/battery/charging_call_state \
                 /sys/class/power_supply/battery/device/charging_suspend \
-                /sys/devices/platform/soc/soc:qcom,pmic_glink/soc:qcom,pmic_glink:qcom,ucsi/power_supply/battery/charge_disable; do
+                /sys/class/power_supply/battery/device/smart_charging_interruption \
+                /sys/class/power_supply/battery/mmi_charging_bypass \
+                /sys/class/power_supply/battery/charging_bypass \
+                /sys/class/power_supply/battery/asus_bypass \
+                /sys/class/power_supply/battery/game_mode_charge_disable \
+                /sys/devices/platform/soc/soc:qcom,pmic_glink/soc:qcom,pmic_glink:qcom,ucsi/power_supply/battery/charge_disable \
+                /sys/class/power_supply/battery/device/smart_charge_disable; do
                 if [ -e "${'$'}dis_node" ]; then
                     chattr -i "${'$'}dis_node" 2>/dev/null || true
                     chmod 0666 "${'$'}dis_node" 2>/dev/null || true
@@ -655,6 +649,7 @@ object RootHelper {
                 /sys/class/power_supply/main/constant_charge_current_max \
                 /sys/class/power_supply/bbc/constant_charge_current_max \
                 /sys/class/power_supply/cp_master/constant_charge_current_max \
+                /sys/class/power_supply/cp_slave/constant_charge_current_max \
                 /sys/class/qcom-battery/constant_charge_current_max \
                 /sys/class/qcom-battery/restrict_cur; do
                 if [ -e "${'$'}cur_node" ]; then
@@ -672,6 +667,17 @@ object RootHelper {
             setprop sys.battery.charging_disabled 0 2>/dev/null || true
             setprop vendor.battery.charge_disable 0 2>/dev/null || true
             setprop persist.vendor.asus.bypass_charging 0 2>/dev/null || true
+            setprop persist.vendor.battery.game_mode 0 2>/dev/null || true
+            setprop persist.vendor.charging.game_bypass 0 2>/dev/null || true
+
+            # Restart ROM thermal daemons when bypass is disabled
+            start mi_thermald 2>/dev/null || true
+            start thermal-engine 2>/dev/null || true
+            start thermalloadalgod 2>/dev/null || true
+            setprop ctl.start mi_thermald 2>/dev/null || true
+            setprop ctl.start thermal-engine 2>/dev/null || true
+            setprop ctl.start vendor.thermal-engine 2>/dev/null || true
+            setprop ctl.start thermalloadalgod 2>/dev/null || true
 
             cmd battery reset 2>/dev/null || dumpsys battery reset 2>/dev/null || true
             echo "APPLIED:${'$'}applied_nodes"
@@ -700,6 +706,17 @@ object RootHelper {
 
         val script = if (enabled) {
             """
+            # 0. Suppress ROM thermal daemons and thermal HALs from throttling charging
+            stop mi_thermald 2>/dev/null || true
+            stop thermal-engine 2>/dev/null || true
+            stop thermalloadalgod 2>/dev/null || true
+            setprop ctl.stop mi_thermald 2>/dev/null || true
+            setprop ctl.stop thermal-engine 2>/dev/null || true
+            setprop ctl.stop vendor.thermal-engine 2>/dev/null || true
+            setprop ctl.stop thermalloadalgod 2>/dev/null || true
+            setprop persist.sys.thermal.config 0 2>/dev/null || true
+            setprop sys.thermal.mode 0 2>/dev/null || true
+
             applied_list=""
 
             # 1. Reset AOSP & Qualcomm thermal charging throttle levels to 0 (unthrottled) and lock 0444
@@ -1064,10 +1081,21 @@ object RootHelper {
             )
         }
 
-        // 1. Neutralize ROM thermal/step/smart/night voters so charger can ramp all the way up to effectiveMa
+        // 1. Neutralize ROM thermal/step/smart/night voters and stop OEM thermal daemons so charger can ramp all the way up to effectiveMa
         if (overrideThermalDaemon) {
             script.append(
                 """
+                # Actively stop ROM thermal daemons that fight or overwrite charging current / thermal thresholds
+                stop mi_thermald 2>/dev/null || true
+                stop thermal-engine 2>/dev/null || true
+                stop thermalloadalgod 2>/dev/null || true
+                setprop ctl.stop mi_thermald 2>/dev/null || true
+                setprop ctl.stop thermal-engine 2>/dev/null || true
+                setprop ctl.stop vendor.thermal-engine 2>/dev/null || true
+                setprop ctl.stop thermalloadalgod 2>/dev/null || true
+                setprop persist.sys.thermal.config 0 2>/dev/null || true
+                setprop sys.thermal.mode 0 2>/dev/null || true
+
                 for tnode in \
                     /sys/class/power_supply/battery/system_temp_level \
                     /sys/class/power_supply/battery/charge_control_limit \
@@ -1266,6 +1294,15 @@ object RootHelper {
         val ledVal = if (enabled && isActiveNow && muteChargingLed) "0" else "255"
 
         val script = """
+            if [ "$nightFlag" = "1" ]; then
+                stop mi_thermald 2>/dev/null || true
+                stop thermal-engine 2>/dev/null || true
+                stop thermalloadalgod 2>/dev/null || true
+                setprop ctl.stop mi_thermald 2>/dev/null || true
+                setprop ctl.stop thermal-engine 2>/dev/null || true
+                setprop ctl.stop vendor.thermal-engine 2>/dev/null || true
+                setprop ctl.stop thermalloadalgod 2>/dev/null || true
+            fi
             applied_night=""
             for nnode in \
                 /sys/class/qcom-battery/night_charging \
